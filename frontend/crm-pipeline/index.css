@@ -1,0 +1,37 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Asosiy shrift va o'lchamlar ── */
+*, *::before, *::after { box-sizing: border-box; }
+
+html { font-size: 14px; }
+
+body {
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: #f1f5f9;
+}
+
+/* ── Scrollbar ko'rinishi ── */
+::-webkit-scrollbar        { width: 5px; height: 5px; }
+::-webkit-scrollbar-track  { background: transparent; }
+::-webkit-scrollbar-thumb  { background: #cbd5e1; border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+/* ── Animatsiya ── */
+@keyframes fadeSlideIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0);   }
+}
+.animate-in { animation: fadeSlideIn 0.2s ease; }
+
+/* ── Ustun ichidagi scroll (board) ── */
+.stage-scroll {
+  overflow-y: auto;
+  max-height: calc(100vh - 200px);
+}
+
+/* ── Drag — brauzerning standart ghost rasmini yashirish ── */
+[draggable="true"] { -webkit-user-drag: element; }
