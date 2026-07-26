@@ -58,6 +58,9 @@ export const api = {
 
   getActivity: (period) => request(`/leads/activity?period=${period}`),
 
+  getLeadComments: (leadId) => request(`/leads/${leadId}/comments`),
+  addLeadComment: (leadId, text) => request(`/leads/${leadId}/comments`, { method: "POST", body: { text } }),
+
   wipeAllLeads: () => request("/leads/wipe-all", { method: "POST" }),
 
   getOperators: () => request("/operators"),

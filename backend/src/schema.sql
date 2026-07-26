@@ -35,6 +35,12 @@ CREATE TABLE IF NOT EXISTS leads (
 CREATE INDEX IF NOT EXISTS idx_leads_assigned ON leads(assigned_operator_id);
 CREATE INDEX IF NOT EXISTS idx_leads_stage ON leads(stage);
 
+-- izoh_2/3/4 (superseded by lead_comments below) — drop if a prior local
+-- migration created them, since fresh installs never gained them.
+ALTER TABLE leads DROP COLUMN IF EXISTS izoh_2;
+ALTER TABLE leads DROP COLUMN IF EXISTS izoh_3;
+ALTER TABLE leads DROP COLUMN IF EXISTS izoh_4;
+
 -- Har safar lid bosqichi o'zgarganda bitta yozuv qo'shiladi — Reja
 -- (Kunlik/Haftalik/Oylik) hisobotlari shu jadvaldan hisoblanadi.
 CREATE TABLE IF NOT EXISTS lead_stage_history (
@@ -49,3 +55,15 @@ CREATE TABLE IF NOT EXISTS lead_stage_history (
 
 CREATE INDEX IF NOT EXISTS idx_stage_history_operator_time ON lead_stage_history(operator_id, changed_at);
 CREATE INDEX IF NOT EXISTS idx_stage_history_lead ON lead_stage_history(lead_id);
+
+-- AMO CRM-uslubidagi izohlar tarixi — hech qachon o'chirilmaydi yoki
+-- ustidan yozilmaydi, faqat qo'shiladi. `leads.notes` ustuniga tegilmaydi.
+CREATE TABLE IF NOT EXISTS lead_comments (
+  id          SERIAL PRIMARY KEY,
+  lead_id     INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+  operator_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  text        TEXT NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_lead_comments_lead_id ON lead_comments(lead_id);

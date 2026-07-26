@@ -3,6 +3,7 @@ import cors from "cors";
 import compression from "compression";
 import authRoutes from "./routes/auth.js";
 import leadsRoutes from "./routes/leads.js";
+import leadCommentsRoutes from "./routes/leadComments.js";
 import operatorsRoutes from "./routes/operators.js";
 
 const app = express();
@@ -14,6 +15,7 @@ app.use(express.json({ limit: "10mb" }));
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 app.use("/api/auth", authRoutes);
 app.use("/api/leads", leadsRoutes);
+app.use("/api/leads", leadCommentsRoutes);
 app.use("/api/operators", operatorsRoutes);
 
 app.use((req, res) => res.status(404).json({ error: "Topilmadi" }));

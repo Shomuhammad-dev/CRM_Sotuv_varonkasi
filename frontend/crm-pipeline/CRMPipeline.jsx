@@ -20,6 +20,7 @@ import { useTheme } from "./ThemeContext";
 import { useLanguage } from "./LanguageContext";
 import { api } from "./api";
 import LeadsTable from "./LeadsTable";
+import LeadComments from "./LeadComments";
 
 // ─────────────────────────────────────────────
 // 3. YORDAMCHI KOMPONENTLAR
@@ -322,7 +323,7 @@ function LeadCard({ lead, displayNo, stages, onEdit, isDragging, dragHandleProps
 // 5. LID FORMASI (Modal ichidagi 12 maydon)
 // ─────────────────────────────────────────────
 
-function LeadForm({ form, onChange, isAdmin, operators, mode }) {
+function LeadForm({ form, onChange, isAdmin, operators, mode, leadId }) {
   const { t } = useLanguage();
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -473,7 +474,9 @@ function LeadForm({ form, onChange, isAdmin, operators, mode }) {
         )
       )}
 
-      {/* 14. Izoh */}
+      {/* 14. Izoh — AMO CRM uslubidagi izohlar tarixiga almashtirildi (pastda).
+      Orqaga moslik uchun `notes` maydoni EMPTY_FORM/openEdit'da saqlanib
+      qolmoqda, faqat UI'da ko'rsatilmayapti.
       <FormField label={`14. ${t("field_14")}`}>
         <Textarea
           placeholder="Qo'ng'iroq natijasi, eslatma yoki boshqa izoh..."
@@ -481,6 +484,17 @@ function LeadForm({ form, onChange, isAdmin, operators, mode }) {
           onChange={(e) => onChange("notes", e.target.value)}
         />
       </FormField>
+      */}
+
+      <div className="sm:col-span-2">
+        {mode === "edit" && leadId ? (
+          <LeadComments leadId={leadId} />
+        ) : (
+          <FormField label="14. Izohlar">
+            <p className="text-xs text-slate-400">Lidni saqlagandan so'ng izoh qo'shishingiz mumkin bo'ladi</p>
+          </FormField>
+        )}
+      </div>
     </div>
   );
 }
@@ -607,7 +621,7 @@ function LeadDetailModal({ lead, displayNo, onClose, onEdit, onDelete, stages, o
 // 7. YANGI / TAHRIRLASH MODALI
 // ─────────────────────────────────────────────
 
-function LeadFormModal({ mode, form, onChange, onSave, onClose, saving, isAdmin, operators, error }) {
+function LeadFormModal({ mode, form, onChange, onSave, onClose, saving, isAdmin, operators, error, leadId }) {
   const { t } = useLanguage();
   const title = mode === "add" ? "Yangi lid qo'shish" : "Lidni tahrirlash";
   const isValid = form.fullName.trim() && form.district;
@@ -631,7 +645,7 @@ function LeadFormModal({ mode, form, onChange, onSave, onClose, saving, isAdmin,
 
         {/* Form */}
         <div className="flex-1 overflow-y-auto px-6 py-5">
-          <LeadForm form={form} onChange={onChange} isAdmin={isAdmin} operators={operators} mode={mode} />
+          <LeadForm form={form} onChange={onChange} isAdmin={isAdmin} operators={operators} mode={mode} leadId={leadId} />
           {error && (
             <div className="flex items-center gap-1.5 text-xs text-rose-600 bg-rose-50
               border border-rose-100 rounded-lg px-3 py-2 mt-4">
@@ -1615,6 +1629,7 @@ export default function CRMPipeline() {
           isAdmin={isAdmin}
           operators={operators}
           error={formError}
+          leadId={editingId}
         />
       )}
     </div>
