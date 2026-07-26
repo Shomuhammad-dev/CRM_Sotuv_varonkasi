@@ -461,7 +461,7 @@ router.post("/import", requireAdmin, asyncHandler(async (req, res) => {
 // Barcha lidlar va ularning bosqich tarixini butunlay o'chiradi.
 // `users` jadvaliga tegilmaydi — login/parollar saqlanib qoladi.
 router.post("/wipe-all", requireAdmin, asyncHandler(async (req, res) => {
-  await pool.query("TRUNCATE leads, lead_stage_history RESTART IDENTITY");
+  await pool.query("TRUNCATE leads, lead_stage_history, lead_comments RESTART IDENTITY");
   await safeRedis.invalidateCacheSet(CACHE_SET);
   res.json({ ok: true });
 }));
