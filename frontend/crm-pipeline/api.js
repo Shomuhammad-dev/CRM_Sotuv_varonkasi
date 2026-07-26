@@ -55,11 +55,18 @@ export const api = {
     request("/leads/bulk-assign", { method: "POST", body: { ids, operatorId } }),
 
   distributeLeads: () => request("/leads/distribute", { method: "POST" }),
+  distributeFiltered: (subjectFilter, gradeFilter) =>
+    request("/distribute", { method: "POST", body: { subjectFilter, gradeFilter } }),
 
   getActivity: (period) => request(`/leads/activity?period=${period}`),
 
   getLeadComments: (leadId) => request(`/leads/${leadId}/comments`),
   addLeadComment: (leadId, text) => request(`/leads/${leadId}/comments`, { method: "POST", body: { text } }),
+
+  getReminderCount: () => request("/reminders/count"),
+  getReminders: () => request("/reminders"),
+  addReminder: (data) => request("/reminders", { method: "POST", body: data }),
+  updateReminder: (id, status) => request(`/reminders/${id}`, { method: "PATCH", body: { status } }),
 
   wipeAllLeads: () => request("/leads/wipe-all", { method: "POST" }),
 

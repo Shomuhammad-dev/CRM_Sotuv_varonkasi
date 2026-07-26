@@ -7,6 +7,20 @@ import { safeRedis } from "../redis.js";
 const router = Router();
 router.use(requireAuth);
 
+// "Rad etdi arxivi" uchun kerakli ustunlar — fayl cheklovi tufayli
+// schema.sql ga tegilmaydi, shu sabab server ishga tushganda runtime'da
+// (idempotent, IF NOT EXISTS bilan) qo'shiladi.
+pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS lost_at TIMESTAMPTZ`)
+  .catch((err) => console.error("✘ leads.lost_at ustunini qo'shishda xatolik:", err.message));
+pool.query(`ALTER TABLE lead_archive ADD COLUMN IF NOT EXISTS notes TEXT`)
+  .catch((err) => console.error("✘ lead_archive.notes ustunini qo'shishda xatolik:", err.message));
+pool.query(`ALTER TABLE lead_archive ADD COLUMN IF NOT EXISTS lost_at TIMESTAMPTZ`)
+  .catch((err) => console.error("✘ lead_archive.lost_at ustunini qo'shishda xatolik:", err.message));
+pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS won_at TIMESTAMPTZ`)
+  .catch((err) => console.error("✘ leads.won_at ustunini qo'shishda xatolik:", err.message));
+pool.query(`ALTER TABLE lead_archive ADD COLUMN IF NOT EXISTS won_at TIMESTAMPTZ`)
+  .catch((err) => console.error("✘ lead_archive.won_at ustunini qo'shishda xatolik:", err.message));
+
 const CACHE_SET = "leads_cache_keys";
 const CACHE_TTL = Number(process.env.LEADS_CACHE_TTL_SEC || 20);
 
@@ -72,6 +86,33 @@ router.get("/", asyncHandler(async (req, res) => {
   const result = rows.map(toApi);
   await safeRedis.cacheSet(cacheKey, JSON.stringify(result), CACHE_TTL, CACHE_SET);
   res.json(result);
+}));
+
+// ── GET /api/leads/archive?finalStage=lost|won (admin, Hisobot arxivlari) ──
+// "lost" — lost_at (haqiqiy "rad etildi" payti), "won" — won_at (haqiqiy
+// "a'zo bo'ldi" payti) ustunidan foydalanadi. COALESCE javob shaklini
+// (archivedAt) o'zgartirmaydi — HisobotPage.jsx buni bilmaydi ham,
+// shu sabab frontendga tegmasdan aniqroq sana ko'rsatiladi. processed_at
+// faqat ikkalasi ham mavjud bo'lmagan (eski) yozuvlar uchun zaxira.
+router.get("/archive", requireAdmin, asyncHandler(async (req, res) => {
+  const finalStage = req.query.finalStage === "won" ? "won" : "lost";
+  const { rows } = await pool.query(
+    `SELECT id, full_name, subjects, future_profession, notes, operator_name,
+            COALESCE(lost_at, won_at, processed_at) AS archived_at
+     FROM lead_archive
+     WHERE final_stage = $1
+     ORDER BY archived_at DESC NULLS LAST`,
+    [finalStage]
+  );
+  res.json(rows.map((r) => ({
+    id: r.id,
+    fullName: r.full_name,
+    subjects: r.subjects || [],
+    futureProfession: r.future_profession || "",
+    notes: r.notes || "",
+    operatorName: r.operator_name || null,
+    archivedAt: r.archived_at,
+  })));
 }));
 
 // ── GET /api/leads/activity (admin, Reja: Kunlik/Haftalik/Oylik) ──
@@ -194,26 +235,45 @@ router.put("/:id", asyncHandler(async (req, res) => {
 
   const stageChanged = merged.stage !== existing.stage;
 
+  // AMO CRM uslubida: "won" ham, "lost" ham oddiy bosqich — lid darhol
+  // arxivlanmaydi, kanban board'da ko'rinishda davom etadi. Arxivlash
+  // faqat tungi cron orqali (00:00–08:00 oralig'ida, quyidagi
+  // archiveOldFinalLeads() funksiyasida) amalga oshiriladi.
+
+  // "lost"/"won"ga kirganda tegishli vaqt belgilanadi (cron shundan
+  // hisoblaydi); bosqichdan chiqsa tozalanadi; bosqich o'zgarmasa
+  // saqlanib qoladi (masalan lid hali shu bosqichda turib, faqat izohi
+  // tahrirlansa).
+  let lostAt = existing.lost_at;
+  let wonAt = existing.won_at;
+  if (stageChanged) {
+    if (merged.stage === "lost") lostAt = new Date();
+    else if (existing.stage === "lost") lostAt = null;
+
+    if (merged.stage === "won") wonAt = new Date();
+    else if (existing.stage === "won") wonAt = null;
+  }
+
   const client = await pool.connect();
-  let updated;
   try {
     await client.query("BEGIN");
+
     const { rows } = await client.query(
       `UPDATE leads SET
          stage=$1, district=$2, full_name=$3, school=$4, grade=$5, sector=$6,
          future_profession=$7, subjects=$8, prev_center=$9, notes=$10, phone_personal=$11,
-         phone_father=$12, phone_mother=$13, updated_at=now()
-       WHERE id=$14
+         phone_father=$12, phone_mother=$13, lost_at=$14, won_at=$15, updated_at=now()
+       WHERE id=$16
        RETURNING *`,
       [
         merged.stage, merged.district, merged.full_name, merged.school, merged.grade,
         merged.sector, merged.future_profession, merged.subjects, merged.prev_center,
-        merged.notes, merged.phone_personal, merged.phone_father, merged.phone_mother, id,
+        merged.notes, merged.phone_personal, merged.phone_father, merged.phone_mother,
+        lostAt, wonAt, id,
       ]
     );
-    updated = rows[0];
+    const updated = rows[0];
 
-    // Reja (Kunlik/Haftalik/Oylik) hisobotlari shu tarixdan hisoblanadi.
     if (stageChanged) {
       await client.query(
         `INSERT INTO lead_stage_history (lead_id, operator_id, from_stage, to_stage, changed_by)
@@ -222,15 +282,14 @@ router.put("/:id", asyncHandler(async (req, res) => {
       );
     }
     await client.query("COMMIT");
+    await safeRedis.invalidateCacheSet(CACHE_SET);
+    res.json(toApi(updated));
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;
   } finally {
     client.release();
   }
-
-  await safeRedis.invalidateCacheSet(CACHE_SET);
-  res.json(toApi(updated));
 }));
 
 // ── PATCH /api/leads/:id/assign (admin) ───────
@@ -461,9 +520,109 @@ router.post("/import", requireAdmin, asyncHandler(async (req, res) => {
 // Barcha lidlar va ularning bosqich tarixini butunlay o'chiradi.
 // `users` jadvaliga tegilmaydi — login/parollar saqlanib qoladi.
 router.post("/wipe-all", requireAdmin, asyncHandler(async (req, res) => {
-  await pool.query("TRUNCATE leads, lead_stage_history, lead_comments RESTART IDENTITY");
+  await pool.query("TRUNCATE leads RESTART IDENTITY CASCADE");
   await safeRedis.invalidateCacheSet(CACHE_SET);
   res.json({ ok: true });
 }));
+
+// ── "Rad etdi" + "A'zo bo'ldi" arxivlash job ───
+// Kunlik 00:00–08:00 oralig'ida (tekshiruv callback ichida, cron jadvali
+// sifatida emas — node-cron o'rnatilmagan) ikkalasini ham arxivlaydi:
+// - "lost": lost_at dan 24 soatdan ortiq o'tgan bo'lsa.
+// - "won": won_at qo'yilgan bo'lsa (qo'shimcha 24 soatlik kutish yo'q —
+//   faqat tungi oynani kutadi).
+// Har bir lid uchun copy+delete BITTA tranzaksiyada — nusxa muvaffaqiyatli
+// bo'lmasa o'chirilmaydi. Bitta lidning xatosi qolganlarini to'xtatmaydi.
+async function archiveOldFinalLeads() {
+  const hour = new Date().getHours();
+  if (hour < 0 || hour >= 8) return;
+
+  const { rows: lostCandidates } = await pool.query(
+    `SELECT l.*, u.display_name AS operator_name, 'lost' AS archive_stage
+     FROM leads l
+     LEFT JOIN users u ON u.id = l.assigned_operator_id
+     WHERE l.stage = 'lost' AND l.lost_at IS NOT NULL AND l.lost_at < NOW() - INTERVAL '24 hours'`
+  );
+  const { rows: wonCandidates } = await pool.query(
+    `SELECT l.*, u.display_name AS operator_name, 'won' AS archive_stage
+     FROM leads l
+     LEFT JOIN users u ON u.id = l.assigned_operator_id
+     WHERE l.stage = 'won' AND l.won_at IS NOT NULL`
+  );
+  const candidates = [...lostCandidates, ...wonCandidates];
+  if (candidates.length === 0) return;
+
+  let archivedLost = 0;
+  let archivedWon = 0;
+  for (const lead of candidates) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const { rows: commentRows } = await client.query(
+        `SELECT lc.text, u.display_name AS operator_name, lc.created_at
+         FROM lead_comments lc
+         LEFT JOIN users u ON u.id = lc.operator_id
+         WHERE lc.lead_id = $1
+         ORDER BY lc.created_at ASC`,
+        [lead.id]
+      );
+
+      // 1. Nusxa — lead_archive'ga
+      await client.query(
+        `INSERT INTO lead_archive
+           (original_lead_id, full_name, phone_personal, phone_father, phone_mother,
+            district, school, grade, sector, subjects, prev_center, future_profession,
+            notes, final_stage, operator_id, operator_name, comments, assigned_at, lost_at, won_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
+        [
+          lead.id,
+          lead.full_name,
+          lead.phone_personal,
+          lead.phone_father,
+          lead.phone_mother,
+          lead.district,
+          lead.school,
+          lead.grade,
+          lead.sector,
+          lead.subjects || [],
+          lead.prev_center,
+          lead.future_profession,
+          lead.notes,
+          lead.archive_stage,
+          lead.assigned_operator_id,
+          lead.operator_name,
+          JSON.stringify(commentRows),
+          lead.updated_at,
+          lead.lost_at,
+          lead.won_at,
+        ]
+      );
+
+      // 2. Nusxa tasdiqlangandan keyingina o'chirish — shu bilan bitta
+      // tranzaksiya, shu sabab COMMIT bo'lmaguncha hech narsa yo'qolmaydi.
+      await client.query("DELETE FROM leads WHERE id = $1", [lead.id]);
+
+      await client.query("COMMIT");
+      if (lead.archive_stage === "lost") archivedLost++; else archivedWon++;
+    } catch (err) {
+      await client.query("ROLLBACK");
+      console.error(`✘ Lid #${lead.id} ("${lead.archive_stage}" arxivi) arxivlashda xatolik:`, err.message);
+    } finally {
+      client.release();
+    }
+  }
+
+  const archivedCount = archivedLost + archivedWon;
+  if (archivedCount > 0) {
+    await safeRedis.invalidateCacheSet(CACHE_SET);
+  }
+  console.log(`✔ Arxivlash: ${archivedLost} ta "Rad etdi" + ${archivedWon} ta "A'zo bo'ldi" = ${archivedCount}/${candidates.length} ta lid arxivlandi (${new Date().toISOString()})`);
+}
+
+const ARCHIVE_CHECK_INTERVAL_MS = 60 * 60 * 1000; // har soatda tekshiradi
+setInterval(() => {
+  archiveOldFinalLeads().catch((err) => console.error("✘ Arxivlash job xatosi:", err.message));
+}, ARCHIVE_CHECK_INTERVAL_MS);
 
 export default router;

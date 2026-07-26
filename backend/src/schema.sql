@@ -67,3 +67,49 @@ CREATE TABLE IF NOT EXISTS lead_comments (
 );
 
 CREATE INDEX IF NOT EXISTS idx_lead_comments_lead_id ON lead_comments(lead_id);
+
+-- SoftCRM-uslubidagi eslatmalar (Eslatmalar) — operator/admin liddan
+-- eslatma qo'yadi, bell ikonkasi orqali bugungi eslatmalar ko'rinadi.
+CREATE TABLE IF NOT EXISTS reminders (
+  id           SERIAL PRIMARY KEY,
+  lead_id      INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+  operator_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  remind_at    TIMESTAMPTZ NOT NULL,
+  note         TEXT,
+  status       VARCHAR(20) NOT NULL DEFAULT 'pending'
+                 CHECK (status IN ('pending', 'done', 'snoozed')),
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_reminders_operator_id ON reminders(operator_id);
+CREATE INDEX IF NOT EXISTS idx_reminders_remind_at   ON reminders(remind_at);
+CREATE INDEX IF NOT EXISTS idx_reminders_lead_id     ON reminders(lead_id);
+
+-- ── Arxivlangan lidlar (won/lost bosqichiga o'tganda) ──────────────────────
+-- Lid "A'zo bo'ldi" yoki "Rad etdi" bosqichiga o'tgach leads dan o'chiriladi
+-- va bu jadvalga ko'chiriladi. Hisobot shu jadvaldan o'qiydi.
+CREATE TABLE IF NOT EXISTS lead_archive (
+  id                SERIAL PRIMARY KEY,
+  original_lead_id  INTEGER NOT NULL,          -- avvalgi leads.id (mos yozuv uchun)
+  full_name         TEXT NOT NULL,
+  phone_personal    TEXT,
+  phone_father      TEXT,
+  phone_mother      TEXT,
+  district          TEXT,
+  school            TEXT,
+  grade             TEXT,
+  sector            TEXT,
+  subjects          TEXT[]     NOT NULL DEFAULT '{}',
+  prev_center       TEXT,
+  future_profession TEXT,
+  final_stage       VARCHAR(10) NOT NULL CHECK (final_stage IN ('won', 'lost')),
+  operator_id       INTEGER,                   -- NULL = biriktirilmagan edi
+  operator_name     TEXT,
+  comments          JSONB      NOT NULL DEFAULT '[]',
+  assigned_at       TIMESTAMPTZ,
+  processed_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_lead_archive_operator_id  ON lead_archive(operator_id);
+CREATE INDEX IF NOT EXISTS idx_lead_archive_processed_at ON lead_archive(processed_at);
+CREATE INDEX IF NOT EXISTS idx_lead_archive_final_stage  ON lead_archive(final_stage);

@@ -34,6 +34,10 @@ const HEADER_MAP = {
   "kelajakda kim bolmoqchisiz": "futureProfession",
   "kelajakda kim bolmoqchsiz": "futureProfession", // "i" tushib qolgan yozilish varianti
   "qaysi fanlarga qiziqasiz": "subjects",
+  "qaysi fanlarga qiziqasizlar": "subjects", // ko'plikdagi variant
+  "qiziqadigan fanlar": "subjects",
+  "fanlar": "subjects",
+  "qiziqish": "subjects",
   "qaysi oquv markazida qancha vaqt tayyorlangansiz": "prevCenter",
   "telefon raqam shaxsiy": "phonePersonal",
   "telefon raqam ota": "phoneFather",
@@ -50,6 +54,23 @@ const COLUMN_ORDER = [
   "futureProfession", "subjects", "prevCenter",
   "phonePersonal", "phoneFather", "phoneMother",
 ];
+
+// SheetJS bo'sh sarlavhali ustunlarni "__EMPTY", "__EMPTY_1", "__EMPTY_2"...
+// deb nomlaydi (masalan Excel'da yashirin/formatlangan bo'sh ustunlar).
+// Bular haqiqiy ma'lumot emas — qatordan butunlay olib tashlanadi, aks
+// holda ular ham "notanish ustun" sifatida ko'rsatiladi, ham 12 ustunli
+// pozitsion zaxira hisobini buzadi.
+function stripEmptyColumns(row) {
+  const cleaned = {};
+  for (const [key, value] of Object.entries(row)) {
+    // "__EMPTY"/"__EMPTY_1"... — sarlavha katakchasi umuman yo'q edi.
+    // Bo'sh satr kaliti — sarlavha katakchasi bor, lekin matni bo'sh edi.
+    // Ikkalasi ham haqiqiy ustun emas.
+    if (/^__EMPTY(_\d+)?$/.test(key) || key.trim() === "") continue;
+    cleaned[key] = value;
+  }
+  return cleaned;
+}
 
 function normalizeHeader(h) {
   return String(h || "")
@@ -76,7 +97,11 @@ function mapExcelRow(rawRow) {
 
   entries.forEach(([key, value], i) => {
     const norm = normalizeHeader(key);
-    const nameField = HEADER_MAP[norm];
+    // Aniq moslik topilmasa — "fan" ildizini o'z ichiga olgan har qanday
+    // sarlavha ("fanlarga", "fanni" va h.k.) ham subjects'ga tushadi.
+    // HEADER_MAP'dagi boshqa hech bir ustun "fan" ildizini o'z ichiga
+    // olmaydi, shu sabab bu xavfsiz zaxira.
+    const nameField = HEADER_MAP[norm] || (norm.includes("fan") ? "subjects" : undefined);
     const isKnownPosition = usePositional && i < COLUMN_ORDER.length;
     const field = nameField || (isKnownPosition ? COLUMN_ORDER[i] : undefined);
 
@@ -85,6 +110,7 @@ function mapExcelRow(rawRow) {
 
     if (field === "no") return;
     if (field === "subjects") {
+      console.log('DEBUG subjects mapping — Excel ustun sarlavhasi:', JSON.stringify(key), 'xom qiymat:', JSON.stringify(value));
       mapped.subjects = String(value)
         .split(/[,;]/)
         .map((s) => s.trim())
@@ -97,12 +123,52 @@ function mapExcelRow(rawRow) {
   return { lead: mapped, unmatched };
 }
 
+const IMPORTED_FINGERPRINTS_KEY = "educrm_imported_file_fingerprints";
+
+// Obyekt kalitlari tartibi barqaror bo'lishi uchun (JS raqamsimon
+// kalitlarni avtomatik saralaydi, qolganlarini kiritilgan tartibda
+// qoldiradi — shu aralashish bir xil qatorni turlicha JSON qilib
+// qo'yishi mumkin edi) — kalitlarni saralab keyin JSON qilamiz.
+function stableRowSignature(row) {
+  const sorted = Object.keys(row || {}).sort().map((k) => [k, row[k]]);
+  return JSON.stringify(sorted);
+}
+
+// Faqat birinchi qatorga tayanish yetarli emas — ikkita boshqa faylda
+// birinchi qator tasodifan bir xil bo'lishi mumkin (masalan bir xil
+// ismdan boshlanadigan alifbo tartibidagi eksport). Oxirgi qator ham
+// qo'shilib, faylning "imzosi" ancha ishonchli bo'ladi.
+function computeFileFingerprint(fileName, rowCount, firstRow, lastRow) {
+  return `${fileName}|${rowCount}|${stableRowSignature(firstRow)}|${stableRowSignature(lastRow)}`;
+}
+
+function getImportedFingerprints() {
+  try {
+    const raw = localStorage.getItem(IMPORTED_FINGERPRINTS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveImportedFingerprint(fp) {
+  try {
+    const existing = getImportedFingerprints();
+    if (!existing.includes(fp)) {
+      localStorage.setItem(IMPORTED_FINGERPRINTS_KEY, JSON.stringify([...existing, fp]));
+    }
+  } catch {
+    // localStorage unavailable — not critical, just skip persisting
+  }
+}
+
 function ImportModal({ operators, onClose, onDone }) {
   const { t } = useLanguage();
   const fileRef = useRef(null);
   const [parsedRows, setParsedRows] = useState(null); // {lead, unmatched}[]
   const [unmatchedHeaders, setUnmatchedHeaders] = useState([]);
   const [fileName, setFileName] = useState("");
+  const [fileFingerprint, setFileFingerprint] = useState(null);
   const [defaultOperatorId, setDefaultOperatorId] = useState("");
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState("");
@@ -118,14 +184,42 @@ function ImportModal({ operators, onClose, onDone }) {
     try {
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { type: "array" });
-      const sheet = wb.Sheets[wb.SheetNames[0]];
-      const rawRows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+
+      // Barcha varaqlarni o'qib, ular ichidan HAQIQIY ma'lumotli
+      // (sarlavhali) varaqlarning qatorlarini birlashtiramiz — chart/
+      // diagramma varaqlari (masalan "Диаграмма") sarlavhasiz bo'lgani
+      // uchun SheetJS ularga faqat "0","1"... kabi raqamli kalitlar
+      // beradi, shu bilan ular ajratiladi va tashlab yuboriladi.
+      let rawRows = [];
+      for (const sheetName of wb.SheetNames) {
+        const candidate = wb.Sheets[sheetName];
+        const rows = XLSX.utils.sheet_to_json(candidate, { defval: "" });
+        if (rows.length > 0 && Object.keys(rows[0]).some((k) => k !== "0")) {
+          rawRows = rawRows.concat(rows);
+        }
+      }
+      // Excel'dagi bo'sh/formatlangan ustunlar ("__EMPTY", "__EMPTY_1"...)
+      // haqiqiy ustun emas — har bir qatordan olib tashlanadi.
+      rawRows = rawRows.map(stripEmptyColumns);
 
       if (rawRows.length === 0) {
         setError("Faylda ma'lumot topilmadi");
         setParsedRows(null);
         return;
       }
+
+      const fingerprint = computeFileFingerprint(
+        file.name,
+        rawRows.length,
+        rawRows[0],
+        rawRows[rawRows.length - 1]
+      );
+      if (getImportedFingerprints().includes(fingerprint)) {
+        setError("Bu fayl avval import qilingan");
+        setParsedRows(null);
+        return;
+      }
+      setFileFingerprint(fingerprint);
 
       const mapped = rawRows.map(mapExcelRow);
       const allUnmatched = new Set();
@@ -153,6 +247,7 @@ function ImportModal({ operators, onClose, onDone }) {
         parsedRows,
         defaultOperatorId ? Number(defaultOperatorId) : null
       );
+      if (fileFingerprint) saveImportedFingerprint(fileFingerprint);
       setResult(res);
       onDone();
     } catch (err) {
@@ -469,18 +564,6 @@ export default function LeadsTable({ leads, leadDisplayNo, isAdmin, operators, o
 
         {isAdmin && (
           <div className="flex items-center gap-2">
-            <button
-              onClick={handleDistribute}
-              disabled={unassignedCount === 0 || distributing}
-              title={unassignedCount === 0 ? "Biriktirilmagan lid yo'q" : ""}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold shadow-sm transition
-                ${unassignedCount === 0 || distributing
-                  ? "bg-slate-200 dark:bg-slate-700 text-slate-400 dark:text-slate-500 cursor-not-allowed"
-                  : "bg-violet-500 hover:bg-violet-600 text-white"}`}
-            >
-              {distributing ? <Loader2 size={13} className="animate-spin" /> : <Shuffle size={13} />}
-              {t("btn_distribute")} {unassignedCount > 0 && `(${unassignedCount})`}
-            </button>
             <button
               onClick={() => setShowImport(true)}
               className="flex items-center gap-1.5 bg-emerald-500 hover:bg-emerald-600 text-white

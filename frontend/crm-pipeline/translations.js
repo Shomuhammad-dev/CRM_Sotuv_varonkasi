@@ -22,7 +22,8 @@ export const translations = {
     logout: "Chiqish",
 
     sidebar_dashboard: "Ish stoli",
-    sidebar_tasks: "Vazifa",
+    sidebar_tasks: "Jadval",
+    sidebar_distribution: "Vazifa",
     sidebar_plan: "Reja",
     sidebar_settings: "Sozlamalar",
     period_daily: "Kunlik",
@@ -113,7 +114,8 @@ export const translations = {
     logout: "Log out",
 
     sidebar_dashboard: "Dashboard",
-    sidebar_tasks: "Tasks",
+    sidebar_tasks: "Table",
+    sidebar_distribution: "Distribution",
     sidebar_plan: "Plan",
     sidebar_settings: "Settings",
     period_daily: "Daily",
@@ -204,7 +206,8 @@ export const translations = {
     logout: "Выйти",
 
     sidebar_dashboard: "Рабочий стол",
-    sidebar_tasks: "Задачи",
+    sidebar_tasks: "Таблица",
+    sidebar_distribution: "Распределение",
     sidebar_plan: "План",
     sidebar_settings: "Настройки",
     period_daily: "За день",

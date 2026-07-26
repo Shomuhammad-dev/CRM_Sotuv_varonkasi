@@ -11,7 +11,7 @@ import {
   Star, Users, ArrowRight, Loader2, Home, BarChart2, Menu,
   LogOut, LayoutGrid, Table2, AlertCircle, RotateCcw, Trash2,
   StickyNote, Monitor, CalendarDays, Shuffle, ListChecks,
-  Settings, Sun, Moon, Languages, AlertTriangle,
+  Settings, Sun, Moon, Languages, AlertTriangle, Bell, TrendingUp,
 } from "lucide-react";
 import { STAGES, STAGE_STYLES, DISTRICTS, SUBJECTS, SECTORS, CLASSES, EMPTY_FORM } from "./constants";
 import { LANGUAGES } from "./translations";
@@ -21,6 +21,9 @@ import { useLanguage } from "./LanguageContext";
 import { api } from "./api";
 import LeadsTable from "./LeadsTable";
 import LeadComments from "./LeadComments";
+import VazifaPage from "./VazifaPage";
+import HisobotPage from "./HisobotPage";
+import ReminderModal from "./ReminderModal";
 
 // ─────────────────────────────────────────────
 // 3. YORDAMCHI KOMPONENTLAR
@@ -121,6 +124,8 @@ function Sidebar({ view, reportPeriod, onNavigate, onSelectReport }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const boardActive = view === "board";
   const tableActive = view === "table";
+  const vazifaActive = view === "vazifa";
+  const hisobotActive = view === "hisobot";
   const reportActive = view === "report";
   const settingsActive = view === "settings";
 
@@ -145,6 +150,26 @@ function Sidebar({ view, reportPeriod, onNavigate, onSelectReport }) {
       >
         <ListChecks size={19} />
         <span className="text-[9px] leading-tight text-center font-semibold">{t("sidebar_tasks")}</span>
+      </button>
+
+      <button
+        onClick={() => onNavigate("vazifa")}
+        title={t("sidebar_distribution")}
+        className={`flex flex-col items-center gap-1 w-12 py-2 rounded-xl transition
+          ${vazifaActive ? "bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400" : "text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-600 dark:hover:text-slate-300"}`}
+      >
+        <Shuffle size={19} />
+        <span className="text-[9px] leading-tight text-center font-semibold">{t("sidebar_distribution")}</span>
+      </button>
+
+      <button
+        onClick={() => onNavigate("hisobot")}
+        title="Hisobot"
+        className={`flex flex-col items-center gap-1 w-12 py-2 rounded-xl transition
+          ${hisobotActive ? "bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400" : "text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-600 dark:hover:text-slate-300"}`}
+      >
+        <TrendingUp size={19} />
+        <span className="text-[9px] leading-tight text-center font-semibold">Hisobot</span>
       </button>
 
       <div className="relative">
@@ -197,7 +222,7 @@ function Sidebar({ view, reportPeriod, onNavigate, onSelectReport }) {
 // 4. LID KARTOCHKASI KOMPONENTI
 // ─────────────────────────────────────────────
 
-function LeadCard({ lead, displayNo, stages, onEdit, isDragging, dragHandleProps, onMobileStageChange, isAdmin }) {
+function LeadCard({ lead, displayNo, stages, onEdit, onAddReminder, isDragging, dragHandleProps, onMobileStageChange, isAdmin }) {
   const { t } = useLanguage();
   const st = STAGE_STYLES[lead.stage];
   const [mobileMenu, setMobileMenu] = useState(false);
@@ -260,6 +285,14 @@ function LeadCard({ lead, displayNo, stages, onEdit, isDragging, dragHandleProps
                 </div>
               )}
             </div>
+            {/* Eslatma qo'shish */}
+            <button
+              onClick={() => onAddReminder(lead)}
+              title="Eslatma qo'sh"
+              className="p-1.5 rounded-lg bg-slate-100 dark:bg-slate-700 hover:bg-amber-100 dark:hover:bg-amber-500/20 hover:text-amber-600 dark:hover:text-amber-400 transition text-slate-500 dark:text-slate-300"
+            >
+              <Bell size={13} />
+            </button>
             {/* Ko'rish / Tahrirlash */}
             <button
               onClick={() => onEdit(lead)}
@@ -688,7 +721,7 @@ function LeadFormModal({ mode, form, onChange, onSave, onClose, saving, isAdmin,
 // 8. STAGE USTUNI KOMPONENTI
 // ─────────────────────────────────────────────
 
-function StageColumn({ stage, leads, leadDisplayNo, onAddLead, onEdit, onMobileStageChange,
+function StageColumn({ stage, leads, leadDisplayNo, onAddLead, onEdit, onAddReminder, onMobileStageChange,
   onDragStart, onDragOver, onDrop, dragOverStage, draggingLead, stages, isAdmin }) {
 
   const { t } = useLanguage();
@@ -750,6 +783,7 @@ function StageColumn({ stage, leads, leadDisplayNo, onAddLead, onEdit, onMobileS
               displayNo={leadDisplayNo?.get(lead.id)}
               stages={stages}
               onEdit={onEdit}
+              onAddReminder={onAddReminder}
               isDragging={draggingLead?.id === lead.id}
               onMobileStageChange={onMobileStageChange}
               dragHandleProps={{}}
@@ -1089,6 +1123,95 @@ export default function CRMPipeline() {
   // Mobil menyu
   const [mobileNav, setMobileNav] = useState(false);
 
+  // ── Eslatmalar (Reminders) ────────────────
+  const [reminderCount,     setReminderCount]     = useState(0);
+  const [bellOpen,          setBellOpen]          = useState(false);
+  const [bellReminders,     setBellReminders]     = useState([]);
+  const [bellLoading,       setBellLoading]       = useState(false);
+  const [reminderModalLead, setReminderModalLead] = useState(null); // { id, fullName }
+  const bellRef = useRef(null);
+
+  // Bugungi eslatmalar sonini har 60 soniyada yangilash
+  useEffect(() => {
+    const fetchCount = () => {
+      api.getReminderCount()
+        .then((r) => setReminderCount(r.count ?? 0))
+        .catch(() => {});
+    };
+    fetchCount();
+    const interval = setInterval(fetchCount, 60_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Bell bosilganda ro'yxatni yuklash
+  const handleBellToggle = async () => {
+    if (bellOpen) { setBellOpen(false); return; }
+    setBellOpen(true);
+    setBellLoading(true);
+    try {
+      const data = await api.getReminders();
+      setBellReminders(data);
+    } catch {
+      setBellReminders([]);
+    } finally {
+      setBellLoading(false);
+    }
+  };
+
+  // Bajarildi / Keyinga
+  const handleReminderAction = async (id, status) => {
+    try {
+      await api.updateReminder(id, status);
+      setBellReminders((prev) => prev.filter((r) => r.id !== id));
+      // Countni ham kamaytir
+      setReminderCount((c) => Math.max(0, c - 1));
+    } catch (err) {
+      alert(err.message || "Xatolik");
+    }
+  };
+
+  // Bell dropdown tashqarisiga bosish → yopish
+  useEffect(() => {
+    if (!bellOpen) return;
+    const handler = (e) => {
+      if (bellRef.current && !bellRef.current.contains(e.target)) {
+        setBellOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [bellOpen]);
+
+  // ── Toast bildirishnomalar ────────────────
+  // Vaqti o'tgan eslatmalar avtomatik ekranda chiqadi.
+  // shownIds — ikki marta ko'rsatmaslik uchun.
+  const [toastReminders, setToastReminders] = useState([]);
+  const shownIdsRef = useRef(new Set());
+
+  useEffect(() => {
+    const check = async () => {
+      try {
+        const list = await api.getReminders();
+        const now = Date.now();
+        const due = list.filter(
+          (r) => new Date(r.remind_at).getTime() <= now && !shownIdsRef.current.has(r.id)
+        );
+        if (due.length === 0) return;
+        due.forEach((r) => shownIdsRef.current.add(r.id));
+        setToastReminders((prev) => [...prev, ...due]);
+        // 10 soniyadan keyin avtomatik o'chirish
+        due.forEach((r) => {
+          setTimeout(() => {
+            setToastReminders((prev) => prev.filter((t) => t.id !== r.id));
+          }, 10_000);
+        });
+      } catch {/* jimlik */}
+    };
+    check(); // darhol bir marta
+    const iv = setInterval(check, 60_000);
+    return () => clearInterval(iv);
+  }, []);
+
   // ── Lidlarni backenddan yuklash ───────────
   // Faqat birinchi yuklashda butun ekranni spinner bilan yopamiz — keyingi
   // (masalan import'dan keyingi) yangilashlar fonda, joriy ko'rinishni
@@ -1182,16 +1305,27 @@ export default function CRMPipeline() {
   };
 
   // ── Bosqich o'zgartirish (modal va mobil) ─
+  // AMO CRM uslubida: "lost" boshqa oddiy bosqichlar bilan bir xil —
+  // tasdiqlashsiz, to'g'ridan-to'g'ri o'zgaradi. Faqat "won" arxivlanadi.
   const changeStage = async (leadId, newStage) => {
+    const isFinal = newStage === "won";
     const prevLeads = leads;
-    setLeads((prev) => prev.map((l) => l.id === leadId ? { ...l, stage: newStage } : l));
-    if (detailLead?.id === leadId) {
-      setDetailLead((prev) => ({ ...prev, stage: newStage }));
+
+    if (!isFinal) {
+      setLeads((prev) => prev.map((l) => l.id === leadId ? { ...l, stage: newStage } : l));
+      if (detailLead?.id === leadId) {
+        setDetailLead((prev) => ({ ...prev, stage: newStage }));
+      }
     }
+
     try {
-      await api.updateLead(leadId, { stage: newStage });
+      const result = await api.updateLead(leadId, { stage: newStage });
+      if (result.archived) {
+        setLeads((prev) => prev.filter((l) => l.id !== leadId));
+        if (detailLead?.id === leadId) setDetailLead(null);
+      }
     } catch (err) {
-      setLeads(prevLeads);
+      if (!isFinal) setLeads(prevLeads);
       alert(err.message || "Bosqichni o'zgartirishda xatolik");
     }
   };
@@ -1410,6 +1544,100 @@ export default function CRMPipeline() {
               <span className="hidden sm:inline">{t("newLead")}</span>
             </button>
 
+            {/* 🔔 Eslatmalar bell ikonkasi */}
+            <div className="relative" ref={bellRef}>
+              <button
+                onClick={handleBellToggle}
+                title="Eslatmalar"
+                className="relative p-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-amber-50 dark:hover:bg-amber-500/20 hover:text-amber-600 dark:hover:text-amber-400 text-slate-500 dark:text-slate-400 transition"
+              >
+                <Bell size={16} />
+                {reminderCount > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-[17px] h-[17px] bg-rose-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center px-1 leading-none">
+                    {reminderCount > 99 ? "99+" : reminderCount}
+                  </span>
+                )}
+              </button>
+
+              {/* Bell dropdown */}
+              {bellOpen && (
+                <div className="absolute right-0 top-full mt-2 z-50 bg-white dark:bg-slate-800 rounded-2xl shadow-2xl
+                  border border-slate-200 dark:border-slate-700 w-80 max-h-[420px] flex flex-col overflow-hidden">
+                  {/* Dropdown header */}
+                  <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 dark:border-slate-700">
+                    <div className="flex items-center gap-2">
+                      <Bell size={14} className="text-amber-500" />
+                      <span className="text-sm font-bold text-slate-700 dark:text-slate-200">Eslatmalar</span>
+                      {bellReminders.length > 0 && (
+                        <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded-full bg-rose-100 dark:bg-rose-500/20 text-rose-600 dark:text-rose-400">
+                          {bellReminders.length}
+                        </span>
+                      )}
+                    </div>
+                    <button onClick={() => setBellOpen(false)} className="text-slate-400 hover:text-slate-600 transition">
+                      <X size={14} />
+                    </button>
+                  </div>
+
+                  {/* Ro'yxat */}
+                  <div className="flex-1 overflow-y-auto">
+                    {bellLoading && (
+                      <div className="flex items-center justify-center py-8 text-slate-400">
+                        <Loader2 size={18} className="animate-spin" />
+                      </div>
+                    )}
+                    {!bellLoading && bellReminders.length === 0 && (
+                      <div className="flex flex-col items-center justify-center py-8 gap-2 text-slate-400">
+                        <Bell size={24} />
+                        <p className="text-sm">Hozircha eslatma yo'q</p>
+                      </div>
+                    )}
+                    {!bellLoading && bellReminders.map((r) => {
+                      const dt = new Date(r.remind_at);
+                      const timeStr = dt.toLocaleTimeString("uz-UZ", { hour: "2-digit", minute: "2-digit" });
+                      const dateStr = dt.toLocaleDateString("uz-UZ", { day: "numeric", month: "short" });
+                      return (
+                        <div key={r.id}
+                          className="px-4 py-3 border-b border-slate-50 dark:border-slate-700 last:border-0
+                            hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
+                          {/* Lead nomi */}
+                          <p className="text-xs font-semibold text-slate-700 dark:text-slate-200 truncate">{r.lead_full_name}</p>
+                          {r.note && (
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2">{r.note}</p>
+                          )}
+                          <div className="flex items-center gap-3 mt-1.5 text-[10px] text-slate-400">
+                            <span>{dateStr} · {timeStr}</span>
+                            {isAdmin && r.operator_name && (
+                              <span className="truncate">{r.operator_name}</span>
+                            )}
+                          </div>
+                          {/* Tugmalar */}
+                          <div className="flex gap-1.5 mt-2">
+                            <button
+                              onClick={() => handleReminderAction(r.id, "done")}
+                              className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold
+                                bg-emerald-50 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400
+                                hover:bg-emerald-100 dark:hover:bg-emerald-500/30 transition"
+                            >
+                              <Check size={11} /> Bajarildi
+                            </button>
+                            <button
+                              onClick={() => handleReminderAction(r.id, "snoozed")}
+                              className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold
+                                bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300
+                                hover:bg-slate-200 dark:hover:bg-slate-600 transition"
+                            >
+                              Keyinga
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* Foydalanuvchi va chiqish */}
             <div className="flex items-center gap-2 pl-2 ml-1 border-l border-slate-200 dark:border-slate-700">
               <span className="hidden lg:block text-xs font-semibold text-slate-500 dark:text-slate-400 truncate max-w-[110px]">
@@ -1566,6 +1794,10 @@ export default function CRMPipeline() {
           onOpenLead={(lead) => setDetailLead(lead)}
           onRefresh={loadLeads}
         />
+      ) : view === "vazifa" ? (
+        <VazifaPage leads={leads} operators={operators} onDistributed={loadLeads} />
+      ) : view === "hisobot" ? (
+        <HisobotPage leads={leads} operators={operators} />
       ) : (
         /* ── BOARD — gorizontal scroll (mobil) ── */
         <main className="flex-1 min-h-0 overflow-hidden">
@@ -1587,6 +1819,7 @@ export default function CRMPipeline() {
                     leadDisplayNo={leadDisplayNo}
                     onAddLead={openAdd}
                     onEdit={(lead) => setDetailLead(lead)}
+                    onAddReminder={(lead) => setReminderModalLead(lead)}
                     onMobileStageChange={changeStage}
                     onDragStart={onDragStart}
                     onDragOver={onDragOver}
@@ -1630,6 +1863,83 @@ export default function CRMPipeline() {
           operators={operators}
           error={formError}
           leadId={editingId}
+        />
+      )}
+
+      {/* ── TOAST BILDIRISHNOMALAR (pastki o'ng burchak) ── */}
+      {toastReminders.length > 0 && (
+        <div className="fixed bottom-4 right-4 z-[70] flex flex-col gap-2 pointer-events-none">
+          {toastReminders.map((r) => {
+            const timeStr = new Date(r.remind_at).toLocaleTimeString("uz-UZ", { hour: "2-digit", minute: "2-digit" });
+            return (
+              <div key={r.id}
+                className="pointer-events-auto bg-white dark:bg-slate-800 rounded-2xl shadow-2xl
+                  border-l-4 border-amber-400 border border-slate-200 dark:border-slate-700
+                  w-72 animate-in fade-in slide-in-from-right-4 duration-300">
+                {/* Header */}
+                <div className="flex items-center gap-2 px-4 pt-3 pb-1">
+                  <Bell size={14} className="text-amber-500 flex-shrink-0" />
+                  <span className="text-xs font-bold text-amber-600 dark:text-amber-400">Eslatma vaqti keldi!</span>
+                  <span className="ml-auto text-[10px] text-slate-400">{timeStr}</span>
+                </div>
+                {/* Kontent */}
+                <div className="px-4 pb-1">
+                  <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 truncate">{r.lead_full_name}</p>
+                  {r.note && (
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2">{r.note}</p>
+                  )}
+                </div>
+                {/* Tugmalar */}
+                <div className="flex gap-1.5 px-4 pb-3 pt-2">
+                  <button
+                    onClick={() => {
+                      handleReminderAction(r.id, "done");
+                      setToastReminders((prev) => prev.filter((t) => t.id !== r.id));
+                    }}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold
+                      bg-emerald-50 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400
+                      hover:bg-emerald-100 dark:hover:bg-emerald-500/30 transition"
+                  >
+                    <Check size={11} /> Bajarildi
+                  </button>
+                  <button
+                    onClick={() => {
+                      handleReminderAction(r.id, "snoozed");
+                      setToastReminders((prev) => prev.filter((t) => t.id !== r.id));
+                    }}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold
+                      bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300
+                      hover:bg-slate-200 dark:hover:bg-slate-600 transition"
+                  >
+                    Keyinga
+                  </button>
+                  <button
+                    onClick={() => setToastReminders((prev) => prev.filter((t) => t.id !== r.id))}
+                    className="ml-auto text-slate-300 hover:text-slate-500 transition"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── ESLATMA QO'SHISH MODALI ── */}
+      {reminderModalLead && (
+        <ReminderModal
+          lead={reminderModalLead}
+          onClose={() => setReminderModalLead(null)}
+          onSaved={() => {
+            // Bell countni yangilash
+            api.getReminderCount()
+              .then((r) => setReminderCount(r.count ?? 0))
+              .catch(() => {});
+          }}
+          operators={operators}
+          isAdmin={isAdmin}
+          currentUserId={user.id}
         />
       )}
     </div>
