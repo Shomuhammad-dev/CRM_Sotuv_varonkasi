@@ -55,8 +55,8 @@ export const api = {
     request("/leads/bulk-assign", { method: "POST", body: { ids, operatorId } }),
 
   distributeLeads: () => request("/leads/distribute", { method: "POST" }),
-  distributeFiltered: (subjectFilter, gradeFilter) =>
-    request("/distribute", { method: "POST", body: { subjectFilter, gradeFilter } }),
+  distributeFiltered: (subjectFilter, gradeFilter, operatorId) =>
+    request("/distribute", { method: "POST", body: { subjectFilter, gradeFilter, operatorId: operatorId ?? null } }),
 
   getActivity: (period) => request(`/leads/activity?period=${period}`),
 

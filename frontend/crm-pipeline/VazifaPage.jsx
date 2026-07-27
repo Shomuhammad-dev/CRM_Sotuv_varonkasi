@@ -1,33 +1,35 @@
 // ─────────────────────────────────────────────
 // "Vazifa" — fan + sinf bo'yicha filtrlab, hali operatorga
 // biriktirilmagan lidlarni operatorlar orasida teng taqsimlash.
-// Filtrlash butunlay client-side (leads allaqachon yuklangan) — hech
-// qanday so'rov yubormaydi, faqat "Taqsimlashni boshlash" bosilganda
-// backend chaqiriladi. Boshqa sahifalarga (Ish stoli, Reja, Sozlamalar,
-// Jadval) hech qanday ta'sir qilmaydi.
+// Filtrlash butunlay client-side (leads allaqachon yuklangan).
+// "Taqsimlashni boshlash" bosilganda backend chaqiriladi.
+//
+// ARXITEKTURA QOIDALARI:
+//  1. Fan filter: faqat 1 ta tanlanadi (single-select)
+//  2. Sinf filter: ixtiyoriy, fan filtridan mustaqil
+//  3. subjects bo'sh bo'lsa fan tugmalari DISABLED — silent bypass yo'q
+//  4. alreadyAssignedCount matched bilan bir xil logika ishlatadi
 // ─────────────────────────────────────────────
 
 import { useMemo, useState } from "react";
-import { Shuffle, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
+import { Shuffle, Loader2, CheckCircle2, AlertCircle, X, Info } from "lucide-react";
 import { SUBJECTS } from "./constants";
 import { api } from "./api";
 
 const GRADES = ["5", "6", "7", "8", "9", "10", "11"];
 
-// Excel import orqali kelgan "Qaysi fanlarga qiziqasiz" ustuni erkin matn
-// bo'lgani uchun ko'plab imlo variantlari mavjud (masalan "ingliz tiliga
-// ko'proq", "ingliz tilli"). Shu sabab aniq moslik o'rniga har bir fan
-// uchun kichik-katta harflarga sezgir bo'lmagan "ildiz" (stem) qidiruvi
-// ishlatiladi — backenddagi distribution.js bilan bir xil ro'yxat.
 const SUBJECT_STEMS = {
-  "Ingliz tili": ["ingliz"],
-  "Matematika": ["matematik"],
-  "Rus tili": ["rus t"],
-  "Kimyo": ["kimyo"],
-  "Fizika": ["fizik"],
-  "Biologiya": ["bio"],
-  "Informatika": ["informati", "it"],
-  "Tarix": ["tarix"],
+  "Ingliz tili":  ["ingliz"],
+  "Matematika":   ["matematik"],
+  "Rus tili":     ["rus t"],
+  "Kimyo":        ["kimyo"],
+  "Fizika":       ["fizik"],
+  "Biologiya":    ["bio"],
+  "Informatika":  ["informati", "it"],
+  "Tarix":        ["tarix"],
+  "Geografiya":   ["geograf"],
+  "Adabiyot":     ["adabiy"],
+  "Chizmachilik": ["chizma"],
 };
 
 function subjectStems(subject) {
@@ -36,24 +38,14 @@ function subjectStems(subject) {
 
 function matchesSubject(leadSubjects, subjectFilter) {
   if (!subjectFilter) return true;
-  // subjects bo'sh [], null yoki undefined bo'lsa — fan filtri tanlangan
-  // paytda bunday lidlar hech qachon mos kelmaydi (va .some() xato
-  // bermaydi, agar massiv bo'lmasa).
   if (!Array.isArray(leadSubjects) || leadSubjects.length === 0) return false;
-  const stems = subjectStems(subjectFilter);
-  const filterLower = subjectFilter.toLowerCase();
+  const stems     = subjectStems(subjectFilter);
+  const filterLow = subjectFilter.toLowerCase();
   return leadSubjects.some((s) => {
-    const lower = String(s).toLowerCase();
-    // "hamma fanlarga" (yoki shunga o'xshash) — har qanday fan filtriga mos keladi
-    if (lower.includes("hamma fan")) return true;
-    // Mavjud stem-asosidagi tekshiruv
-    if (stems.some((stem) => lower.includes(stem))) return true;
-    // Ikki tomonlama fuzzy substring: element filtr nomini o'z ichiga
-    // olsa, YOKI element filtr nomining qisqartirilgan shakli bo'lsa
-    // (masalan "geo" ~ "Geografiya"). Teskari yo'nalishda kamida 3
-    // belgili elementlar bilan cheklangan — aks holda "a" kabi juda
-    // qisqa/chalkash qiymatlar har qanday filtrga mos kelib qolardi.
-    return lower.includes(filterLower) || (lower.length >= 3 && filterLower.includes(lower));
+    const low = String(s).toLowerCase();
+    if (low.includes("hamma fan")) return true;
+    if (stems.some((stem) => low.includes(stem))) return true;
+    return low.includes(filterLow) || (low.length >= 3 && filterLow.includes(low));
   });
 }
 
@@ -64,56 +56,121 @@ function gradeNumber(grade) {
 
 function splitEvenly(total, operators) {
   if (operators.length === 0) return [];
-  const base = Math.floor(total / operators.length);
+  const base      = Math.floor(total / operators.length);
   const remainder = total % operators.length;
   return operators.map((op, i) => ({
-    operatorId: op.id,
+    operatorId:  op.id,
     displayName: op.displayName,
-    count: base + (i < remainder ? 1 : 0),
+    count:       base + (i < remainder ? 1 : 0),
   }));
+}
+
+// ── Bitta filtr funksiyasi — matched va alreadyAssigned ikkalasi shu orqali ──
+// subjectDisabled = true bo'lsa fan filtri QABUL QILINMAYDI (silent bypass yo'q)
+function applyFilters(list, subjectFilter, gradeFilter, subjectDisabled) {
+  return list.filter((l) => {
+    if (!subjectDisabled && subjectFilter && !matchesSubject(l.subjects, subjectFilter)) return false;
+    if (gradeFilter && gradeNumber(l.grade) !== gradeFilter) return false;
+    return true;
+  });
 }
 
 export default function VazifaPage({ leads, operators, onDistributed }) {
   const [subjectFilter, setSubjectFilter] = useState(null);
-  const [gradeFilter, setGradeFilter] = useState(null);
-  const [distributing, setDistributing] = useState(false);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState(false);
+  const [gradeFilter,   setGradeFilter]   = useState(null);
+  const [distributing,  setDistributing]  = useState(false);
+  const [error,         setError]         = useState("");
+  const [success,       setSuccess]       = useState(false);
+  // "" = tanlanmagan -> standart teng bo'linish. Aks holda faqat shu
+  // operatorga barcha mos lidlar biriktiriladi (bo'linmasdan).
+  const [selectedOperatorId, setSelectedOperatorId] = useState("");
 
-  // Fan+sinf filtriga mos kelgan, LEKIN hali operatorga biriktirilmagan
-  // lidlar — IRON RULE (leads.js /leads/distribute bilan bir xil qoida):
-  // allaqachon biriktirilgan lid (oldingi Vazifa yurishidan yoki boshqa
-  // yo'l bilan) hech qachon qayta yozilmaydi, shu sabab har bir filtr
-  // partiyasi mustaqil bo'ladi va oldingi partiyalar bilan kesishmaydi.
-  const matchesFilter = useMemo(() => {
-    return leads.filter((l) => {
-      if (!matchesSubject(l.subjects, subjectFilter)) return false;
-      console.log('DEBUG grade compare — raw stored grade:', JSON.stringify(l.grade), 'selected gradeFilter:', JSON.stringify(gradeFilter));
-      if (gradeFilter && gradeNumber(l.grade) !== gradeFilter) return false;
-      return true;
-    });
-  }, [leads, subjectFilter, gradeFilter]);
-
-  const matched = useMemo(
-    () => matchesFilter.filter((l) => l.assignedOperatorId == null),
-    [matchesFilter]
+  // ── Taqsimlanmagan lidlar ─────────────────────────────────────────
+  const unassigned = useMemo(
+    () => leads.filter((l) => l.assignedOperatorId == null),
+    [leads]
   );
 
-  // Faqat ma'lumot uchun — filtrga mos keladigan, lekin shu sabab
-  // "Tanlandi"ga kirmagan (allaqachon biriktirilgan) lidlar soni.
-  const alreadyAssignedCount = matchesFilter.length - matched.length;
+  // ── Bazada subjects bor-yo'qligini tekshirish ─────────────────────
+  // Eng kamida bitta lidda subjects bo'lsa subjectsEmpty = false
+  const subjectsEmpty = useMemo(
+    () => unassigned.length > 0 && unassigned.every((l) => !l.subjects || l.subjects.length === 0),
+    [unassigned]
+  );
 
-  const preview = useMemo(() => splitEvenly(matched.length, operators), [matched.length, operators]);
+  // Fan filtri ishlatilishi mumkinmi (subject data bor + subjects populated)
+  const subjectDisabled = subjectsEmpty;
+
+  // ── Fan tugmachalari uchun sonlar ─────────────────────────────────
+  // Sinf filtriga BOG'LIQ EMAS (mustaqil ko'rsatiladi)
+  const subjectCounts = useMemo(() => {
+    if (subjectDisabled) return {};
+    const counts = {};
+    for (const lead of unassigned) {
+      for (const s of SUBJECTS) {
+        if (matchesSubject(lead.subjects, s)) {
+          counts[s] = (counts[s] || 0) + 1;
+        }
+      }
+    }
+    return counts;
+  }, [unassigned, subjectDisabled]);
+
+  // ── Sinf tugmachalari uchun sonlar ───────────────────────────────
+  // Fan filtriga BOG'LIQ EMAS (mustaqil ko'rsatiladi)
+  const gradeCounts = useMemo(() => {
+    const counts = {};
+    for (const lead of unassigned) {
+      const g = gradeNumber(lead.grade);
+      if (g) counts[g] = (counts[g] || 0) + 1;
+    }
+    return counts;
+  }, [unassigned]);
+
+  // ── Filtrlangan (taqsimlanmagan) natija ──────────────────────────
+  const matched = useMemo(
+    () => applyFilters(unassigned, subjectFilter, gradeFilter, subjectDisabled),
+    [unassigned, subjectFilter, gradeFilter, subjectDisabled]
+  );
+
+  // ── Allaqachon biriktirilgan lekin filtrga mos kelganlar ──────────
+  // matched bilan AYNAN BIR XIL logika (inconsistency yo'q)
+  const alreadyAssigned = useMemo(() => {
+    const assigned = leads.filter((l) => l.assignedOperatorId != null);
+    return applyFilters(assigned, subjectFilter, gradeFilter, subjectDisabled);
+  }, [leads, subjectFilter, gradeFilter, subjectDisabled]);
+
+  // Bitta operator tanlangan bo'lsa preview shu operatorga 100% ko'rsatiladi,
+  // aks holda mavjud teng-bo'linish (o'zgarishsiz).
+  const selectedOperator = useMemo(
+    () => operators.find((op) => String(op.id) === selectedOperatorId) || null,
+    [operators, selectedOperatorId]
+  );
+
+  const preview = useMemo(
+    () => (
+      selectedOperator
+        ? [{ operatorId: selectedOperator.id, displayName: selectedOperator.displayName, count: matched.length }]
+        : splitEvenly(matched.length, operators)
+    ),
+    [matched.length, operators, selectedOperator]
+  );
 
   const handleDistribute = async () => {
     setDistributing(true);
     setError("");
     setSuccess(false);
     try {
-      await api.distributeFiltered(subjectFilter, gradeFilter);
+      // subjectDisabled bo'lsa fan filtri backend ga ham yuborilmaydi
+      await api.distributeFiltered(
+        subjectDisabled ? null : subjectFilter,
+        gradeFilter,
+        selectedOperator ? selectedOperator.id : null
+      );
       setSuccess(true);
       setSubjectFilter(null);
       setGradeFilter(null);
+      setSelectedOperatorId("");
       onDistributed();
       setTimeout(() => setSuccess(false), 2500);
     } catch (err) {
@@ -123,17 +180,45 @@ export default function VazifaPage({ leads, operators, onDistributed }) {
     }
   };
 
+  const clearFilters = () => {
+    setSubjectFilter(null);
+    setGradeFilter(null);
+  };
+
+  const hasFilter = (!subjectDisabled && subjectFilter) || gradeFilter;
+  const activeFilterLabel = [
+    !subjectDisabled && subjectFilter ? subjectFilter : null,
+    gradeFilter ? `${gradeFilter}-sinf` : null,
+  ].filter(Boolean).join(" · ");
+
   return (
     <main className="flex-1 min-h-0 overflow-auto p-4 sm:p-6">
-      <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100 mb-4">Vazifa — Operatorlarga taqsimlash</h2>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100">
+          Vazifa — Operatorlarga taqsimlash
+        </h2>
+        {hasFilter && (
+          <button onClick={clearFilters}
+            className="flex items-center gap-1 text-xs text-slate-400 hover:text-rose-500 transition">
+            <X size={13} /> Filterni tozalash
+          </button>
+        )}
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
-        {/* Chap ustun: statistika + filtrlar */}
+
+        {/* ── Chap: statistika + filtrlar ────────────────────────── */}
         <div className="flex flex-col gap-4">
-          <div className="grid grid-cols-2 gap-3">
+
+          {/* Statistika */}
+          <div className="grid grid-cols-3 gap-3">
             <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-4 text-center">
               <p className="text-2xl font-bold text-slate-800 dark:text-slate-100">{leads.length}</p>
               <p className="text-xs text-slate-400 mt-1">Jami</p>
+            </div>
+            <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-4 text-center">
+              <p className="text-2xl font-bold text-amber-500">{unassigned.length}</p>
+              <p className="text-xs text-slate-400 mt-1">Taqsimlanmagan</p>
             </div>
             <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-4 text-center">
               <p className="text-2xl font-bold text-indigo-600 dark:text-indigo-400">{matched.length}</p>
@@ -141,54 +226,105 @@ export default function VazifaPage({ leads, operators, onDistributed }) {
             </div>
           </div>
 
+          {/* subjects bo'sh ogohlantirish — fan disabled sababi tushuntiriladi */}
+          {subjectsEmpty && unassigned.length > 0 && (
+            <div className="flex items-start gap-2 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-800 rounded-xl px-3 py-2.5">
+              <AlertCircle size={14} className="text-amber-500 mt-0.5 flex-shrink-0" />
+              <p className="text-xs text-amber-700 dark:text-amber-400">
+                Fan ma'lumotlari bazada yo'q — fan filtri <span className="font-semibold">ishlamaydi</span>.
+                Faqat sinf bo'yicha filter yoki filtrsiz taqsimlang.
+                Fan filtri uchun Excel qayta import qiling.
+              </p>
+            </div>
+          )}
+
+          {/* Fan filtri */}
           <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-4">
-            <p className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-3">Fan</p>
+            <div className="flex items-center gap-2 mb-3">
+              <p className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Fan</p>
+              {subjectDisabled && (
+                <span className="text-[10px] bg-slate-100 dark:bg-slate-700 text-slate-400 px-2 py-0.5 rounded-full">
+                  ma'lumot yo'q
+                </span>
+              )}
+            </div>
             <div className="flex flex-col gap-1.5">
-              {SUBJECTS.map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => setSubjectFilter((cur) => (cur === s ? null : s))}
-                  className={`text-left px-3 py-2 rounded-lg border text-sm font-medium transition
-                    ${subjectFilter === s
-                      ? "bg-indigo-500 text-white border-indigo-500"
-                      : "bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-600 hover:border-indigo-300"}`}
-                >
-                  {s}
-                </button>
-              ))}
+              {SUBJECTS.map((s) => {
+                const count  = subjectCounts[s] || 0;
+                const active = !subjectDisabled && subjectFilter === s;
+                return (
+                  <button
+                    key={s}
+                    type="button"
+                    disabled={subjectDisabled}
+                    onClick={() => {
+                      if (subjectDisabled) return;
+                      setSubjectFilter((cur) => (cur === s ? null : s));
+                      setGradeFilter(null);
+                    }}
+                    className={`flex items-center justify-between px-3 py-2 rounded-lg border text-sm font-medium transition
+                      ${subjectDisabled
+                        ? "bg-slate-50 dark:bg-slate-700/30 text-slate-300 dark:text-slate-600 border-slate-100 dark:border-slate-700/50 cursor-not-allowed"
+                        : active
+                          ? "bg-indigo-500 text-white border-indigo-500"
+                          : count === 0
+                            ? "bg-slate-50 dark:bg-slate-700/50 text-slate-400 dark:text-slate-500 border-slate-100 dark:border-slate-700"
+                            : "bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-600 hover:border-indigo-300 cursor-pointer"
+                      }`}
+                  >
+                    <span>{s}</span>
+                    <span className={`text-xs font-bold tabular-nums ${
+                      subjectDisabled ? "text-slate-300 dark:text-slate-700"
+                        : active ? "text-indigo-100"
+                        : count === 0 ? "text-slate-300 dark:text-slate-600"
+                        : "text-indigo-600 dark:text-indigo-400"
+                    }`}>
+                      {subjectDisabled ? "—" : count}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
 
+          {/* Sinf filtri */}
           <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-4">
             <p className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-3">Sinf</p>
-            <div className="flex flex-wrap gap-2 mb-2">
-              {GRADES.map((g) => (
-                <button
-                  key={g}
-                  type="button"
-                  onClick={() => {
-                    console.log('DEBUG grade button clicked — value:', JSON.stringify(g));
-                    setGradeFilter((cur) => (cur === g ? null : g));
-                  }}
-                  className={`w-11 h-11 rounded-lg border text-sm font-semibold transition
-                    ${gradeFilter === g
-                      ? "bg-indigo-500 text-white border-indigo-500"
-                      : "bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-600 hover:border-indigo-300"}`}
-                >
-                  {g}
-                </button>
-              ))}
+            <div className="flex flex-wrap gap-2">
+              {GRADES.map((g) => {
+                const count  = gradeCounts[g] || 0;
+                const active = gradeFilter === g;
+                return (
+                  <button key={g} type="button"
+                    onClick={() => setGradeFilter((cur) => (cur === g ? null : g))}
+                    className={`relative flex flex-col items-center justify-center w-12 h-12 rounded-lg border text-sm font-semibold transition
+                      ${active
+                        ? "bg-indigo-500 text-white border-indigo-500"
+                        : count === 0
+                          ? "bg-slate-50 dark:bg-slate-700/50 text-slate-300 dark:text-slate-600 border-slate-100 dark:border-slate-700"
+                          : "bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-600 hover:border-indigo-300"
+                      }`}
+                  >
+                    <span>{g}</span>
+                    <span className={`text-[9px] font-bold leading-none tabular-nums ${
+                      active ? "text-indigo-200" : "text-slate-400 dark:text-slate-500"
+                    }`}>{count}</span>
+                  </button>
+                );
+              })}
             </div>
-            {(subjectFilter || gradeFilter) && (
-              <p className="text-xs text-emerald-600 dark:text-emerald-400">
-                {subjectFilter || "Barcha fanlar"} · {gradeFilter ? `${gradeFilter}-sinf` : "barcha sinflar"} → {matched.length} ta
+
+            {/* Aktiv filtr natijalari */}
+            {(hasFilter || gradeFilter) && (
+              <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-3 font-medium">
+                {activeFilterLabel || "Barcha sinflar"} →{" "}
+                <span className="font-bold">{matched.length} ta</span> taqsimlanmagan lid
               </p>
             )}
           </div>
         </div>
 
-        {/* O'ng ustun: taqsimlash paneli */}
+        {/* ── O'ng: taqsimlash paneli ─────────────────────────────── */}
         <div className="flex flex-col gap-4">
           <div className="bg-white dark:bg-slate-800 rounded-2xl border-2 border-emerald-400 dark:border-emerald-500 p-4">
             <div className="flex items-center justify-between mb-3">
@@ -196,22 +332,55 @@ export default function VazifaPage({ leads, operators, onDistributed }) {
                 <Shuffle size={16} className="text-emerald-600 dark:text-emerald-400" />
                 <p className="text-sm font-bold text-slate-800 dark:text-slate-100">Operatorlarga taqsimlash</p>
               </div>
-              <span className="text-[11px] text-slate-400">{matched.length} ÷ {operators.length} operator</span>
+              <span className="text-[11px] text-slate-400">
+                {selectedOperator
+                  ? `${matched.length} ta → ${selectedOperator.displayName}`
+                  : `${matched.length} ÷ ${operators.length} operator`}
+              </span>
             </div>
 
-            {alreadyAssignedCount > 0 && (
-              <p className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/10
-                border border-amber-100 dark:border-amber-900 rounded-lg px-3 py-2 mb-3">
-                <AlertCircle size={12} className="flex-shrink-0" />
-                {alreadyAssignedCount} ta lid filtrga mos keladi, lekin allaqachon operatorga biriktirilgani uchun "Tanlandi"ga kiritilmadi
-              </p>
+            {/* Operator-picker — ixtiyoriy: bitta operator tanlansa, taqsimlash
+                teng bo'linmaydi, barchasi shu operatorga biriktiriladi */}
+            <div className="mb-3">
+              <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1.5">
+                Operator <span className="normal-case font-normal text-slate-400">(ixtiyoriy)</span>
+              </label>
+              <select
+                value={selectedOperatorId}
+                onChange={(e) => setSelectedOperatorId(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg border text-sm bg-white dark:bg-slate-700
+                  text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-600
+                  focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              >
+                <option value="">Barcha operatorlar (teng taqsimlash)</option>
+                {operators.map((op) => (
+                  <option key={op.id} value={op.id}>{op.displayName}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Allaqachon biriktirilganlar haqida ogohlantirish */}
+            {alreadyAssigned.length > 0 && (
+              <div className="flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-400
+                bg-amber-50 dark:bg-amber-500/10 border border-amber-100 dark:border-amber-900
+                rounded-lg px-3 py-2 mb-3">
+                <AlertCircle size={12} className="flex-shrink-0 mt-0.5" />
+                <span>
+                  {alreadyAssigned.length} ta lid{activeFilterLabel ? ` (${activeFilterLabel})` : ""} allaqachon
+                  operatorga biriktirilgan — taqsimlanmaydi
+                </span>
+              </div>
             )}
 
+            {/* Operator preview */}
             <div className="flex flex-col gap-1.5 mb-4">
               {preview.map((p) => (
-                <div key={p.operatorId} className="flex items-center justify-between px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-900 text-sm">
+                <div key={p.operatorId}
+                  className="flex items-center justify-between px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-900 text-sm">
                   <span className="text-slate-600 dark:text-slate-300">{p.displayName}</span>
-                  <span className="font-semibold text-indigo-600 dark:text-indigo-400">{p.count} ta</span>
+                  <span className="font-semibold text-indigo-600 dark:text-indigo-400 tabular-nums">
+                    {p.count} ta
+                  </span>
                 </div>
               ))}
               {operators.length === 0 && (
@@ -224,7 +393,7 @@ export default function VazifaPage({ leads, operators, onDistributed }) {
               disabled={matched.length === 0 || distributing || operators.length === 0}
               className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold text-white transition
                 ${success ? "bg-emerald-500" : "bg-indigo-500 hover:bg-indigo-600"}
-                disabled:opacity-50 disabled:cursor-not-allowed`}
+                disabled:opacity-40 disabled:cursor-not-allowed`}
             >
               {distributing && <Loader2 size={14} className="animate-spin" />}
               {success ? <CheckCircle2 size={14} /> : <Shuffle size={14} />}
@@ -238,10 +407,26 @@ export default function VazifaPage({ leads, operators, onDistributed }) {
             )}
           </div>
 
-          <div className="bg-indigo-50 dark:bg-indigo-500/10 rounded-2xl border border-indigo-100 dark:border-indigo-900 p-4">
-            <p className="text-xs text-indigo-700 dark:text-indigo-400">
-              Chapdan fan va sinf tanlang → natija avtomatik hisoblanadi → "Taqsimlashni boshlash" tugmasi bilan
-              hali operatorga biriktirilmagan lidlar operatorlarga teng taqsimlanadi.
+          {/* Yo'riqnoma */}
+          <div className="bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200 dark:border-slate-700 p-4 space-y-1.5">
+            <div className="flex items-center gap-1.5 mb-1">
+              <Info size={12} className="text-slate-400" />
+              <p className="text-xs text-slate-500 dark:text-slate-400 font-semibold">Qanday ishlaydi:</p>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              1. Fan tanlang <span className="text-slate-400">(faqat 1 ta, bazada ma'lumot bo'lsa)</span>
+            </p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              2. Sinf tanlang <span className="text-slate-400">(ixtiyoriy)</span>
+            </p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              3. Operator tanlang <span className="text-slate-400">(ixtiyoriy — bo'sh qoldirilsa barcha operatorlarga teng bo'linadi, tanlansa hammasi shu bittasiga tushadi)</span>
+            </p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              4. "Taqsimlashni boshlash" tugmasini bosing
+            </p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              5. Taqsimlangandan keyin operatorlar kanban orqali ishlaydi
             </p>
           </div>
         </div>
