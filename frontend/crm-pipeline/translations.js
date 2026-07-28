@@ -37,8 +37,10 @@ export const translations = {
     stat_conversion: "Konversiya",
 
     stage_new: "Yangi lidlar",
-    stage_contacted: "Aloqaga chiqildi",
+    stage_contacted: "Brak nomer",
     stage_invited: "Sinovga taklif qilindi",
+    stage_our_center: "Markazimizda o'qidi",
+    stage_other_center: "Boshqa markazda o'qidi",
     stage_won: "A'zo bo'ldi / Yutildi",
     stage_lost: "Rad etdi / Yo'qotildi",
 
@@ -131,6 +133,8 @@ export const translations = {
     stage_new: "New leads",
     stage_contacted: "Contacted",
     stage_invited: "Invited to trial",
+    stage_our_center: "Studying at our center",
+    stage_other_center: "Studying at another center",
     stage_won: "Won / Enrolled",
     stage_lost: "Lost / Declined",
 
@@ -223,6 +227,8 @@ export const translations = {
     stage_new: "Новые лиды",
     stage_contacted: "Связались",
     stage_invited: "Приглашены на пробный",
+    stage_our_center: "Учится у нас",
+    stage_other_center: "Учится в другом центре",
     stage_won: "Записался / Успех",
     stage_lost: "Отказ / Потерян",
 

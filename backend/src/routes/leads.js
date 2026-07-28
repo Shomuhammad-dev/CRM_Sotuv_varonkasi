@@ -21,6 +21,25 @@ pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS won_at TIMESTAMPTZ`)
 pool.query(`ALTER TABLE lead_archive ADD COLUMN IF NOT EXISTS won_at TIMESTAMPTZ`)
   .catch((err) => console.error("✘ lead_archive.won_at ustunini qo'shishda xatolik:", err.message));
 
+// Yangi stage lar: 'our_center' va 'other_center' — bazadagi CHECK constraint kengaytiriladi.
+// Eski constraint topib o'chiriladi (nom dinamik aniqlanadi), yangi keng ro'yxat bilan qayta qo'shiladi.
+pool.query(`
+  DO $$
+  DECLARE v_con TEXT;
+  BEGIN
+    SELECT conname INTO v_con FROM pg_constraint
+    WHERE conrelid = 'leads'::regclass AND contype = 'c' AND conname LIKE '%stage%'
+    LIMIT 1;
+    IF v_con IS NOT NULL THEN
+      EXECUTE 'ALTER TABLE leads DROP CONSTRAINT ' || quote_ident(v_con);
+    END IF;
+    ALTER TABLE leads ADD CONSTRAINT leads_stage_check
+      CHECK (stage IN ('new','contacted','invited','won','lost','our_center','other_center'));
+  EXCEPTION WHEN duplicate_object THEN NULL;
+  END;
+  $$
+`).catch((err) => console.error("✘ stage CHECK constraint yangilashda xatolik:", err.message));
+
 const CACHE_SET = "leads_cache_keys";
 const CACHE_TTL = Number(process.env.LEADS_CACHE_TTL_SEC || 20);
 

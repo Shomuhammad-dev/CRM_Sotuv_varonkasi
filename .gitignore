@@ -3,4 +3,8 @@
 .env.production
 .env*.local
 node_modules/
-".vite/" 
+.vite/
+.claude/
+*.timestamp-*.mjs
+backend/_diag_test_iron_rule_restore.mjs
+

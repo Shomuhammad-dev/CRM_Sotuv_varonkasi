@@ -13,7 +13,7 @@ CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 CREATE TABLE IF NOT EXISTS leads (
   id                     SERIAL PRIMARY KEY,
   stage                  VARCHAR(20) NOT NULL DEFAULT 'new'
-                           CHECK (stage IN ('new', 'contacted', 'invited', 'won', 'lost')),
+                           CHECK (stage IN ('new', 'contacted', 'invited', 'won', 'lost', 'our_center', 'other_center')),
   district               VARCHAR(100),
   full_name              VARCHAR(150) NOT NULL,
   school                 VARCHAR(150),

@@ -969,6 +969,9 @@ function SettingsPage({ onWipeComplete }) {
     setWiping(true);
     try {
       await api.wipeAllLeads();
+      // Lidlar o'chirilganda import fingerprinting ham tozalanadi,
+      // aks holda xuddi shu faylni qayta import qilib bo'lmay qoladi.
+      localStorage.removeItem("educrm_imported_file_fingerprints");
       setConfirmOpen(false);
       onWipeComplete();
     } catch (err) {
@@ -1321,8 +1324,13 @@ export default function CRMPipeline() {
     try {
       const result = await api.updateLead(leadId, { stage: newStage });
       if (result.archived) {
+        // Darhol arxivlangan — state dan o'chirish
         setLeads((prev) => prev.filter((l) => l.id !== leadId));
         if (detailLead?.id === leadId) setDetailLead(null);
+      } else {
+        // Oddiy bosqich yangilandi (won/lost ham kanban da qoladi)
+        setLeads((prev) => prev.map((l) => l.id === leadId ? { ...l, stage: newStage } : l));
+        if (detailLead?.id === leadId) setDetailLead((prev) => ({ ...prev, stage: newStage }));
       }
     } catch (err) {
       if (!isFinal) setLeads(prevLeads);

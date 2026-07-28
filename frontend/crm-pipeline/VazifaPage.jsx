@@ -81,9 +81,9 @@ export default function VazifaPage({ leads, operators, onDistributed }) {
   const [distributing,  setDistributing]  = useState(false);
   const [error,         setError]         = useState("");
   const [success,       setSuccess]       = useState(false);
-  // "" = tanlanmagan -> standart teng bo'linish. Aks holda faqat shu
-  // operatorga barcha mos lidlar biriktiriladi (bo'linmasdan).
-  const [selectedOperatorId, setSelectedOperatorId] = useState("");
+  // [] = hech biri tanlanmagan -> barcha operatorlarga teng bo'linish (standart).
+  // Bir yoki bir necha operator tanlansa, faqat shular orasida teng bo'linadi.
+  const [selectedOperatorIds, setSelectedOperatorIds] = useState([]);
 
   // ── Taqsimlanmagan lidlar ─────────────────────────────────────────
   const unassigned = useMemo(
@@ -140,21 +140,22 @@ export default function VazifaPage({ leads, operators, onDistributed }) {
     return applyFilters(assigned, subjectFilter, gradeFilter, subjectDisabled);
   }, [leads, subjectFilter, gradeFilter, subjectDisabled]);
 
-  // Bitta operator tanlangan bo'lsa preview shu operatorga 100% ko'rsatiladi,
-  // aks holda mavjud teng-bo'linish (o'zgarishsiz).
-  const selectedOperator = useMemo(
-    () => operators.find((op) => String(op.id) === selectedOperatorId) || null,
-    [operators, selectedOperatorId]
+  // Tanlangan operatorlar ro'yxati (bo'sh = hammasi)
+  const selectedOperators = useMemo(
+    () =>
+      selectedOperatorIds.length === 0
+        ? operators
+        : operators.filter((op) => selectedOperatorIds.includes(op.id)),
+    [operators, selectedOperatorIds]
   );
 
-  const preview = useMemo(
-    () => (
-      selectedOperator
-        ? [{ operatorId: selectedOperator.id, displayName: selectedOperator.displayName, count: matched.length }]
-        : splitEvenly(matched.length, operators)
-    ),
-    [matched.length, operators, selectedOperator]
-  );
+  // Preview: 0 tanlangan → barcha 7 ta, 1 tanlangan → hammasi unga, N → shular orasida teng
+  const preview = useMemo(() => {
+    if (selectedOperatorIds.length === 0) return splitEvenly(matched.length, operators);
+    if (selectedOperatorIds.length === 1)
+      return [{ operatorId: selectedOperators[0].id, displayName: selectedOperators[0].displayName, count: matched.length }];
+    return splitEvenly(matched.length, selectedOperators);
+  }, [matched.length, operators, selectedOperators, selectedOperatorIds]);
 
   const handleDistribute = async () => {
     setDistributing(true);
@@ -165,12 +166,12 @@ export default function VazifaPage({ leads, operators, onDistributed }) {
       await api.distributeFiltered(
         subjectDisabled ? null : subjectFilter,
         gradeFilter,
-        selectedOperator ? selectedOperator.id : null
+        selectedOperatorIds.length === 0 ? null : selectedOperatorIds
       );
       setSuccess(true);
       setSubjectFilter(null);
       setGradeFilter(null);
-      setSelectedOperatorId("");
+      setSelectedOperatorIds([]);
       onDistributed();
       setTimeout(() => setSuccess(false), 2500);
     } catch (err) {
@@ -179,6 +180,12 @@ export default function VazifaPage({ leads, operators, onDistributed }) {
       setDistributing(false);
     }
   };
+
+  // Operatorni toggle qilish — id massivga qo'shiladi yoki olib tashlanadi
+  const toggleOperator = (id) =>
+    setSelectedOperatorIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
 
   const clearFilters = () => {
     setSubjectFilter(null);
@@ -333,30 +340,49 @@ export default function VazifaPage({ leads, operators, onDistributed }) {
                 <p className="text-sm font-bold text-slate-800 dark:text-slate-100">Operatorlarga taqsimlash</p>
               </div>
               <span className="text-[11px] text-slate-400">
-                {selectedOperator
-                  ? `${matched.length} ta → ${selectedOperator.displayName}`
-                  : `${matched.length} ÷ ${operators.length} operator`}
+                {selectedOperatorIds.length === 0
+                  ? `${matched.length} ÷ ${operators.length} operator`
+                  : selectedOperatorIds.length === 1
+                    ? `${matched.length} ta → ${selectedOperators[0]?.displayName}`
+                    : `${matched.length} ÷ ${selectedOperatorIds.length} operator`}
               </span>
             </div>
 
-            {/* Operator-picker — ixtiyoriy: bitta operator tanlansa, taqsimlash
-                teng bo'linmaydi, barchasi shu operatorga biriktiriladi */}
+            {/* Operator-picker — ko'p tanlov: hech biri tanlanmasa barcha operatorlarga
+                teng bo'linadi; bir yoki bir nechasi tanlansa faqat shular orasida teng taqsimlanadi */}
             <div className="mb-3">
               <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1.5">
                 Operator <span className="normal-case font-normal text-slate-400">(ixtiyoriy)</span>
               </label>
-              <select
-                value={selectedOperatorId}
-                onChange={(e) => setSelectedOperatorId(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg border text-sm bg-white dark:bg-slate-700
-                  text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-600
-                  focus:outline-none focus:ring-2 focus:ring-indigo-400"
-              >
-                <option value="">Barcha operatorlar (teng taqsimlash)</option>
+              <div className="border border-slate-200 dark:border-slate-600 rounded-lg overflow-hidden
+                divide-y divide-slate-100 dark:divide-slate-700">
+                {/* "Barchasi" varianti — hech biri tanlanmagan holat */}
+                <label className="flex items-center gap-2.5 px-3 py-2 cursor-pointer
+                  hover:bg-slate-50 dark:hover:bg-slate-700/50 select-none">
+                  <input
+                    type="checkbox"
+                    checked={selectedOperatorIds.length === 0}
+                    onChange={() => setSelectedOperatorIds([])}
+                    className="accent-indigo-500 w-3.5 h-3.5 flex-shrink-0"
+                  />
+                  <span className="text-sm text-slate-600 dark:text-slate-300">
+                    Barcha operatorlar (teng taqsimlash)
+                  </span>
+                </label>
+                {/* Har bir operator uchun checkbox */}
                 {operators.map((op) => (
-                  <option key={op.id} value={op.id}>{op.displayName}</option>
+                  <label key={op.id} className="flex items-center gap-2.5 px-3 py-2 cursor-pointer
+                    hover:bg-slate-50 dark:hover:bg-slate-700/50 select-none">
+                    <input
+                      type="checkbox"
+                      checked={selectedOperatorIds.includes(op.id)}
+                      onChange={() => toggleOperator(op.id)}
+                      className="accent-indigo-500 w-3.5 h-3.5 flex-shrink-0"
+                    />
+                    <span className="text-sm text-slate-600 dark:text-slate-300">{op.displayName}</span>
+                  </label>
                 ))}
-              </select>
+              </div>
             </div>
 
             {/* Allaqachon biriktirilganlar haqida ogohlantirish */}
@@ -420,7 +446,7 @@ export default function VazifaPage({ leads, operators, onDistributed }) {
               2. Sinf tanlang <span className="text-slate-400">(ixtiyoriy)</span>
             </p>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              3. Operator tanlang <span className="text-slate-400">(ixtiyoriy — bo'sh qoldirilsa barcha operatorlarga teng bo'linadi, tanlansa hammasi shu bittasiga tushadi)</span>
+              3. Operator(lar) tanlang <span className="text-slate-400">(ixtiyoriy — hech biri tanlanmasa barcha operatorlarga teng bo'linadi; bir yoki bir nechasi tanlansa faqat shular orasida teng taqsimlanadi)</span>
             </p>
             <p className="text-xs text-slate-500 dark:text-slate-400">
               4. "Taqsimlashni boshlash" tugmasini bosing

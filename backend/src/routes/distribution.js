@@ -49,15 +49,34 @@ router.post("/", requireAdmin, asyncHandler(async (req, res) => {
     return res.status(400).json({ error: "Operatorlar topilmadi" });
   }
 
-  // Ixtiyoriy "bitta operatorga to'liq biriktirish" rejimi — berilgan bo'lsa
-  // haqiqiy, mavjud operatorga tegishli ekanligi tekshiriladi.
-  let targetOperator = null;
-  if (operatorId != null && operatorId !== "") {
-    targetOperator = operatorRows.find((o) => o.id === Number(operatorId));
-    if (!targetOperator) {
+  // operatorId qiymati 3 xil kelishi mumkin:
+  //   null / ""        → standart: barcha operatorlarga teng bo'linish
+  //   raqam / string   → bitta operatorga to'liq biriktirish (oldingi xulq-atvor)
+  //   massiv (number[])→ ko'p tanlangan: faqat shular orasida teng bo'linish (yangi)
+  //
+  // targetOps === null  →  barcha operatorlar (standart rejim)
+  // targetOps === array →  faqat tanlangan operatorlar
+  let targetOps = null;
+
+  if (Array.isArray(operatorId) && operatorId.length > 0) {
+    // Ko'p tanlov rejimi
+    const ids = operatorId.map(Number).filter((n) => !isNaN(n) && n > 0);
+    if (ids.length === 0) {
+      return res.status(400).json({ error: "operatorId massivi bo'sh yoki noto'g'ri" });
+    }
+    targetOps = operatorRows.filter((o) => ids.includes(o.id));
+    if (targetOps.length !== ids.length) {
+      return res.status(400).json({ error: "Bir yoki bir nechta operator topilmadi" });
+    }
+  } else if (operatorId != null && operatorId !== "") {
+    // Bitta operator rejimi (oldingi xulq-atvor — o'zgarishsiz)
+    const single = operatorRows.find((o) => o.id === Number(operatorId));
+    if (!single) {
       return res.status(400).json({ error: "Operator topilmadi" });
     }
+    targetOps = [single];
   }
+  // targetOps === null → standart (barcha operatorlar)
 
   const params = [];
   const conditions = ["assigned_operator_id IS NULL"];
@@ -77,11 +96,12 @@ router.post("/", requireAdmin, asyncHandler(async (req, res) => {
     params
   );
 
+  // Taqsimlashda ishlatiluvchi operatorlar ro'yxati
+  const opsToUse = targetOps || operatorRows;
+
   if (matchedRows.length === 0) {
     return res.json({
-      distributed: targetOperator
-        ? [{ operatorId: targetOperator.id, displayName: targetOperator.display_name, count: 0, studentIds: [] }]
-        : operatorRows.map((o) => ({ operatorId: o.id, displayName: o.display_name, count: 0, studentIds: [] })),
+      distributed: opsToUse.map((o) => ({ operatorId: o.id, displayName: o.display_name, count: 0, studentIds: [] })),
       totalMatched: 0,
       distributedCount: 0,
     });
@@ -90,15 +110,16 @@ router.post("/", requireAdmin, asyncHandler(async (req, res) => {
   let distributed;
   let updatedCount = 0;
 
-  if (targetOperator) {
-    // Bitta operatorga to'liq biriktirish rejimi — round-robin bo'linish
-    // ishlatilmaydi, barcha mos (hali biriktirilmagan) lidlar bitta atomik
-    // so'rov bilan shu operatorga yoziladi. IS NULL tekshiruvi round-robin
-    // yo'ldagi bilan bir xil — allaqachon biriktirilgan lid qayta yozilmaydi.
+  if (targetOps && targetOps.length === 1) {
+    // ── Bitta operatorga to'liq biriktirish rejimi (oldingi xulq-atvor — o'zgarishsiz) ──
+    // Barcha mos (hali biriktirilmagan) lidlar bitta atomik so'rov bilan shu operatorga
+    // yoziladi. assigned_operator_id IS NULL tekshiruvi allaqachon biriktirilgan lidlarni
+    // qayta yozilishdan himoya qiladi.
+    const op = targetOps[0];
     const leadIds = matchedRows.map((r) => r.id);
     distributed = [{
-      operatorId: targetOperator.id,
-      displayName: targetOperator.display_name,
+      operatorId: op.id,
+      displayName: op.display_name,
       count: leadIds.length,
       studentIds: leadIds,
     }];
@@ -106,19 +127,23 @@ router.post("/", requireAdmin, asyncHandler(async (req, res) => {
     const { rowCount } = await pool.query(
       `UPDATE leads SET assigned_operator_id = $1, updated_at = now()
        WHERE id = ANY($2::int[]) AND assigned_operator_id IS NULL`,
-      [targetOperator.id, leadIds]
+      [op.id, leadIds]
     );
     updatedCount = rowCount;
   } else {
-    // Standart rejim — operatorlar orasida teng bo'linish (o'zgarishsiz).
-    const base = Math.floor(matchedRows.length / operatorRows.length);
-    const remainder = matchedRows.length % operatorRows.length;
+    // ── Teng bo'linish rejimi ──────────────────────────────────────────────────────────
+    // Standart (targetOps === null): barcha operatorlar — oldingi xulq-atvor o'zgarishsiz.
+    // Ko'p tanlov (targetOps.length > 1): faqat tanlangan operatorlar orasida teng bo'linish.
+    // Ikki holatda ham qoldiq (remainder) birinchi operatorlarga +1 beriladi.
+    // assigned_operator_id IS NULL tekshiruvi allaqachon biriktirilgan lidlarni himoya qiladi.
+    const base = Math.floor(matchedRows.length / opsToUse.length);
+    const remainder = matchedRows.length % opsToUse.length;
 
     distributed = [];
     const leadIds = [];
     const operatorIds = [];
     let cursor = 0;
-    operatorRows.forEach((op, i) => {
+    opsToUse.forEach((op, i) => {
       const take = base + (i < remainder ? 1 : 0);
       const chunk = matchedRows.slice(cursor, cursor + take).map((r) => r.id);
       cursor += take;

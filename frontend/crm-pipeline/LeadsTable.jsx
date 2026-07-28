@@ -34,10 +34,15 @@ const HEADER_MAP = {
   "kelajakda kim bolmoqchisiz": "futureProfession",
   "kelajakda kim bolmoqchsiz": "futureProfession", // "i" tushib qolgan yozilish varianti
   "qaysi fanlarga qiziqasiz": "subjects",
-  "qaysi fanlarga qiziqasizlar": "subjects", // ko'plikdagi variant
+  "qaysi fanlarga qiziqasizlar": "subjects",
+  "qaysi fanlarga qiziqasiz masalan ingiliz tili": "subjects", // to'liq sarlavha varianti
   "qiziqadigan fanlar": "subjects",
   "fanlar": "subjects",
+  "fan": "subjects",
   "qiziqish": "subjects",
+  "yo'nalish": "subjects",
+  "yonalish": "subjects",
+  "soha": "subjects",
   "qaysi oquv markazida qancha vaqt tayyorlangansiz": "prevCenter",
   "telefon raqam shaxsiy": "phonePersonal",
   "telefon raqam ota": "phoneFather",
@@ -110,7 +115,6 @@ function mapExcelRow(rawRow) {
 
     if (field === "no") return;
     if (field === "subjects") {
-      console.log('DEBUG subjects mapping — Excel ustun sarlavhasi:', JSON.stringify(key), 'xom qiymat:', JSON.stringify(value));
       mapped.subjects = String(value)
         .split(/[,;]/)
         .map((s) => s.trim())
@@ -174,6 +178,30 @@ function ImportModal({ operators, onClose, onDone }) {
   const [error, setError] = useState("");
   const [result, setResult] = useState(null);
 
+  const parseFileRaw = async (file) => {
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array" });
+    let rawRows = [];
+    for (const sheetName of wb.SheetNames) {
+      const candidate = wb.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(candidate, { defval: "" });
+      if (rows.length > 0 && Object.keys(rows[0]).some((k) => k !== "0")) {
+        rawRows = rawRows.concat(rows);
+      }
+    }
+    rawRows = rawRows.map(stripEmptyColumns);
+    return rawRows;
+  };
+
+  const applyParsedRows = (rawRows, fingerprint) => {
+    setFileFingerprint(fingerprint);
+    const mapped = rawRows.map(mapExcelRow);
+    const allUnmatched = new Set();
+    mapped.forEach((r) => r.unmatched.forEach((h) => allUnmatched.add(h)));
+    setParsedRows(mapped.map((r) => r.lead));
+    setUnmatchedHeaders([...allUnmatched]);
+  };
+
   const handleFile = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -182,25 +210,7 @@ function ImportModal({ operators, onClose, onDone }) {
     setFileName(file.name);
 
     try {
-      const buf = await file.arrayBuffer();
-      const wb = XLSX.read(buf, { type: "array" });
-
-      // Barcha varaqlarni o'qib, ular ichidan HAQIQIY ma'lumotli
-      // (sarlavhali) varaqlarning qatorlarini birlashtiramiz — chart/
-      // diagramma varaqlari (masalan "Диаграмма") sarlavhasiz bo'lgani
-      // uchun SheetJS ularga faqat "0","1"... kabi raqamli kalitlar
-      // beradi, shu bilan ular ajratiladi va tashlab yuboriladi.
-      let rawRows = [];
-      for (const sheetName of wb.SheetNames) {
-        const candidate = wb.Sheets[sheetName];
-        const rows = XLSX.utils.sheet_to_json(candidate, { defval: "" });
-        if (rows.length > 0 && Object.keys(rows[0]).some((k) => k !== "0")) {
-          rawRows = rawRows.concat(rows);
-        }
-      }
-      // Excel'dagi bo'sh/formatlangan ustunlar ("__EMPTY", "__EMPTY_1"...)
-      // haqiqiy ustun emas — har bir qatordan olib tashlanadi.
-      rawRows = rawRows.map(stripEmptyColumns);
+      const rawRows = await parseFileRaw(file);
 
       if (rawRows.length === 0) {
         setError("Faylda ma'lumot topilmadi");
@@ -209,29 +219,22 @@ function ImportModal({ operators, onClose, onDone }) {
       }
 
       const fingerprint = computeFileFingerprint(
-        file.name,
-        rawRows.length,
-        rawRows[0],
-        rawRows[rawRows.length - 1]
+        file.name, rawRows.length, rawRows[0], rawRows[rawRows.length - 1]
       );
+
       if (getImportedFingerprints().includes(fingerprint)) {
-        setError("Bu fayl avval import qilingan");
+        setError("Fayl avval import qilingan!");
         setParsedRows(null);
         return;
       }
-      setFileFingerprint(fingerprint);
 
-      const mapped = rawRows.map(mapExcelRow);
-      const allUnmatched = new Set();
-      mapped.forEach((r) => r.unmatched.forEach((h) => allUnmatched.add(h)));
-
-      setParsedRows(mapped.map((r) => r.lead));
-      setUnmatchedHeaders([...allUnmatched]);
+      applyParsedRows(rawRows, fingerprint);
     } catch (err) {
       setError("Faylni o'qishda xatolik: " + err.message);
       setParsedRows(null);
     }
   };
+
 
   const validCount = useMemo(
     () => (parsedRows || []).filter((r) => r.fullName).length,

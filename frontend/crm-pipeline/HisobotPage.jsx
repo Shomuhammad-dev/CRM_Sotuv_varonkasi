@@ -8,7 +8,10 @@
 
 import { useEffect, useMemo, useState, Fragment } from "react";
 import * as XLSX from "xlsx";
-import { ChevronDown, ChevronRight, Download, Archive, Loader2, AlertCircle } from "lucide-react";
+import { ChevronDown, ChevronRight, Download, Archive, Loader2, AlertCircle, Target, Pencil, Trash2 } from "lucide-react";
+
+// ── localStorage kaliti ──
+const GOALS_KEY = "crm_operator_goals";
 
 const DATE_FILTERS = [
   { id: "today", label: "Bugun", days: 1 },
@@ -62,10 +65,110 @@ function windowDaysFor(filterId, windowStartKey) {
   return Math.max(1, Math.round((today - start) / 86400000) + 1);
 }
 
-function goalBadge(perDay) {
-  if (perDay >= 15) return { label: "Yaxshi", cls: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400" };
-  if (perDay >= 8) return { label: "O'rta", cls: "bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400" };
+// goal — adminning belgilagan kunlik maqsadi. Agar yo'q bo'lsa, standart 15
+function goalBadge(perDay, goal = 15) {
+  const mid = goal * 0.6;
+  if (perDay >= goal) return { label: "Yaxshi", cls: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400" };
+  if (perDay >= mid) return { label: "O'rta", cls: "bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400" };
   return { label: "Past", cls: "bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-400" };
+}
+
+// ── Maqsad CRUD modali ──
+function GoalModal({ operator, currentGoal, onSave, onDelete, onClose }) {
+  const [value, setValue] = useState(String(currentGoal ?? 15));
+  const [note, setNote] = useState("");
+
+  const isNew = currentGoal == null;
+
+  const handleSave = () => {
+    const num = parseInt(value, 10);
+    if (!num || num < 1 || num > 999) return;
+    onSave(num, note.trim());
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      onClick={(e) => e.target === e.currentTarget && onClose()}
+    >
+      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xl w-80 p-6">
+        <h3 className="text-base font-bold text-slate-800 dark:text-slate-100 mb-4 flex items-center gap-2">
+          <Target size={16} className="text-indigo-500" />
+          {isNew ? "Maqsad belgilash" : "Maqsadni tahrirlash"}
+        </h3>
+
+        <div className="mb-3">
+          <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase mb-1">Operator</label>
+          <div className="text-sm font-semibold text-slate-700 dark:text-slate-200 bg-slate-50 dark:bg-slate-900 rounded-lg px-3 py-2">
+            {operator?.displayName ?? "—"}
+          </div>
+        </div>
+
+        <div className="mb-3">
+          <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase mb-1">
+            Kunlik maqsad (lid/kun)
+          </label>
+          <input
+            type="number"
+            min={1}
+            max={999}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleSave()}
+            className="w-full rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900
+              px-3 py-2 text-sm text-slate-800 dark:text-slate-100 outline-none
+              focus:ring-2 focus:ring-indigo-400"
+            autoFocus
+          />
+          <p className="text-[10px] text-slate-400 mt-1">
+            Standart: 15 &nbsp;·&nbsp; ≥ maqsad = Yaxshi &nbsp;·&nbsp; ≥ 60% = O'rta
+          </p>
+        </div>
+
+        <div className="mb-5">
+          <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase mb-1">Izoh (ixtiyoriy)</label>
+          <input
+            type="text"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Masalan: yangi oydan qo'llaniladi"
+            className="w-full rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900
+              px-3 py-2 text-sm text-slate-800 dark:text-slate-100 outline-none
+              focus:ring-2 focus:ring-indigo-400"
+          />
+        </div>
+
+        <div className="flex gap-2">
+          {!isNew && (
+            <button
+              type="button"
+              onClick={onDelete}
+              className="flex items-center gap-1 px-3 py-2 rounded-lg bg-rose-50 dark:bg-rose-500/10
+                text-rose-600 dark:text-rose-400 text-xs font-semibold hover:bg-rose-100 transition"
+            >
+              <Trash2 size={12} /> O'chirish
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex-1 px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-600
+              dark:text-slate-300 text-xs font-semibold hover:bg-slate-200 transition"
+          >
+            Bekor
+          </button>
+          <button
+            type="button"
+            onClick={handleSave}
+            className="flex-1 px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white
+              text-xs font-semibold transition"
+          >
+            Saqlash
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function formatDateTime(iso) {
@@ -222,6 +325,32 @@ export default function HisobotPage({ leads, operators }) {
   const [dateFilter, setDateFilter] = useState("7d");
   const [expandedId, setExpandedId] = useState(null);
 
+  // ── MAQSAD CRUD: { [operatorId]: number } ──
+  const [goals, setGoals] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(GOALS_KEY) || "{}"); }
+    catch { return {}; }
+  });
+  const [goalModal, setGoalModal] = useState(null); // { operator } | null
+
+  const saveGoal = (operatorId, value) => {
+    setGoals((prev) => {
+      const next = { ...prev, [operatorId]: value };
+      localStorage.setItem(GOALS_KEY, JSON.stringify(next));
+      return next;
+    });
+    setGoalModal(null);
+  };
+
+  const deleteGoal = (operatorId) => {
+    setGoals((prev) => {
+      const next = { ...prev };
+      delete next[operatorId];
+      localStorage.setItem(GOALS_KEY, JSON.stringify(next));
+      return next;
+    });
+    setGoalModal(null);
+  };
+
   // ── "Rad etdi arxivi" — GET /api/leads/archive?finalStage=lost ──
   const [archiveRows, setArchiveRows] = useState([]);
   const [archiveLoading, setArchiveLoading] = useState(true);
@@ -302,7 +431,8 @@ export default function HisobotPage({ leads, operators }) {
       Aloqa: r.aloqa,
       "A'zo": r.azo,
       "Kun/lid": Number(r.perDay.toFixed(2)),
-      Maqsad: goalBadge(r.perDay).label,
+      "Belgilangan maqsad": goals[r.operatorId] ?? 15,
+      Maqsad: goalBadge(r.perDay, goals[r.operatorId]).label,
       "So'nggi faollik": formatDateTime(r.lastActivity),
     }));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sheet1), "Operatorlar");
@@ -362,6 +492,18 @@ export default function HisobotPage({ leads, operators }) {
 
   return (
     <main className="flex-1 min-h-0 overflow-auto p-4 sm:p-6">
+
+      {/* ── GoalModal ── */}
+      {goalModal && (
+        <GoalModal
+          operator={goalModal.operator}
+          currentGoal={goals[goalModal.operator.id] ?? null}
+          onSave={(val) => saveGoal(goalModal.operator.id, val)}
+          onDelete={() => deleteGoal(goalModal.operator.id)}
+          onClose={() => setGoalModal(null)}
+        />
+      )}
+
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100">Hisobot — operatorlar samaradorligi</h2>
         <div className="flex items-center gap-2">
@@ -403,22 +545,35 @@ export default function HisobotPage({ leads, operators }) {
               <th className="text-center px-4 py-3 font-bold text-slate-500 dark:text-slate-400 uppercase text-xs whitespace-nowrap">Kun/lid</th>
               <th className="text-center px-4 py-3 font-bold text-slate-500 dark:text-slate-400 uppercase text-xs whitespace-nowrap">Maqsad</th>
               <th className="text-left px-4 py-3 font-bold text-slate-500 dark:text-slate-400 uppercase text-xs whitespace-nowrap">So'nggi faollik</th>
+              <th className="text-center px-4 py-3 font-bold text-slate-500 dark:text-slate-400 uppercase text-xs whitespace-nowrap">Amallar</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => {
-              const badge = goalBadge(r.perDay);
+              const opGoal = goals[r.operatorId];
+              const badge = goalBadge(r.perDay, opGoal);
               const expanded = expandedId === r.operatorId;
+              const colSpan = 9;
               return (
                 <Fragment key={r.operatorId}>
-                  <tr
-                    onClick={() => setExpandedId(expanded ? null : r.operatorId)}
-                    className="border-b border-slate-100 dark:border-slate-700 last:border-0 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700/50 transition"
-                  >
-                    <td className="px-2 text-slate-400">
+                  <tr className="border-b border-slate-100 dark:border-slate-700 last:border-0 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
+                    <td
+                      className="px-2 text-slate-400 cursor-pointer"
+                      onClick={() => setExpandedId(expanded ? null : r.operatorId)}
+                    >
                       {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                     </td>
-                    <td className="px-4 py-3 font-semibold text-slate-700 dark:text-slate-200 whitespace-nowrap">{r.displayName}</td>
+                    <td
+                      className="px-4 py-3 font-semibold text-slate-700 dark:text-slate-200 whitespace-nowrap cursor-pointer"
+                      onClick={() => setExpandedId(expanded ? null : r.operatorId)}
+                    >
+                      {r.displayName}
+                      {opGoal != null && (
+                        <span className="ml-2 text-[10px] font-normal text-indigo-500 dark:text-indigo-400">
+                          M:{opGoal}/kun
+                        </span>
+                      )}
+                    </td>
                     <td className="text-center px-4 py-3 text-slate-600 dark:text-slate-300">{r.assignedCount}</td>
                     <td className="text-center px-4 py-3 text-slate-600 dark:text-slate-300">{r.aloqa}</td>
                     <td className="text-center px-4 py-3 text-slate-600 dark:text-slate-300">{r.azo}</td>
@@ -427,10 +582,50 @@ export default function HisobotPage({ leads, operators }) {
                       <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold ${badge.cls}`}>{badge.label}</span>
                     </td>
                     <td className="px-4 py-3 text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap">{formatDateTime(r.lastActivity)}</td>
+                    {/* ── CRUD tugmalari ── */}
+                    <td className="px-3 py-3">
+                      <div className="flex items-center justify-center gap-1">
+                        {/* Ko'rish / yashirish */}
+                        <button
+                          type="button"
+                          title={expanded ? "Yopish" : "Ko'rish"}
+                          onClick={() => setExpandedId(expanded ? null : r.operatorId)}
+                          className="p-1.5 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-300
+                            hover:bg-slate-200 dark:hover:bg-slate-600 transition"
+                        >
+                          {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                        </button>
+                        {/* Maqsad — tahrirlash/yaratish */}
+                        <button
+                          type="button"
+                          title={opGoal != null ? "Maqsadni tahrirlash" : "Maqsad belgilash"}
+                          onClick={() => setGoalModal({ operator: { id: r.operatorId, displayName: r.displayName } })}
+                          className={`p-1.5 rounded-lg transition ${
+                            opGoal != null
+                              ? "bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-200"
+                              : "bg-slate-100 dark:bg-slate-700 text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600"
+                          }`}
+                        >
+                          {opGoal != null ? <Pencil size={13} /> : <Target size={13} />}
+                        </button>
+                        {/* O'chirish — faqat maqsad belgilangan bo'lsa */}
+                        {opGoal != null && (
+                          <button
+                            type="button"
+                            title="Maqsadni o'chirish"
+                            onClick={() => deleteGoal(r.operatorId)}
+                            className="p-1.5 rounded-lg bg-rose-50 dark:bg-rose-500/10 text-rose-500
+                              hover:bg-rose-100 dark:hover:bg-rose-500/20 transition"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        )}
+                      </div>
+                    </td>
                   </tr>
                   {expanded && (
                     <tr className="bg-slate-50 dark:bg-slate-900/50">
-                      <td colSpan={8} className="px-4 py-4">
+                      <td colSpan={colSpan} className="px-4 py-4">
                         <p className="text-[10px] font-semibold text-slate-400 uppercase mb-2">So'nggi 7 kun — yangilangan lidlar soni</p>
                         <Sparkline leads={r.assignedLeads} />
                       </td>
@@ -438,7 +633,7 @@ export default function HisobotPage({ leads, operators }) {
                   )}
                   {expanded && (
                     <tr className="bg-slate-50 dark:bg-slate-900/50">
-                      <td colSpan={8} className="px-4 pb-4">
+                      <td colSpan={colSpan} className="px-4 pb-4">
                         <p className="text-[10px] font-semibold text-slate-400 uppercase mb-2">Faol lidlar</p>
                         <ActiveLeadsDrilldown leads={r.activeLeads} />
                       </td>
@@ -448,7 +643,7 @@ export default function HisobotPage({ leads, operators }) {
               );
             })}
             {rows.length === 0 && (
-              <tr><td colSpan={8} className="text-center py-8 text-sm text-slate-400">Operatorlar topilmadi</td></tr>
+              <tr><td colSpan={9} className="text-center py-8 text-sm text-slate-400">Operatorlar topilmadi</td></tr>
             )}
           </tbody>
         </table>
