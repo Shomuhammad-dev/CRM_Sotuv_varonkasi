@@ -24,7 +24,7 @@ export const DISTRICTS = ["Yuqori Chirchiq tumani"];
 
 export const SUBJECTS = [
   "Matematika", "Fizika", "Kimyo", "Biologiya", "Ingliz tili",
-  "Rus tili", "Tarix", "Geografiya", "Informatika", "Adabiyot", "Chizmachilik",
+  "Rus tili", "Ona tili", "Tarix", "Geografiya", "Informatika", "Adabiyot", "Chizmachilik",
 ];
 
 export const SECTORS = ["O'zbek", "Rus"];

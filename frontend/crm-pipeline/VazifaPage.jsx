@@ -22,6 +22,7 @@ const SUBJECT_STEMS = {
   "Ingliz tili":  ["ingliz"],
   "Matematika":   ["matematik"],
   "Rus tili":     ["rus t"],
+  "Ona tili":     ["ona t"],
   "Kimyo":        ["kimyo"],
   "Fizika":       ["fizik"],
   "Biologiya":    ["bio"],
